@@ -6,6 +6,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from .constants import GMAIL_SCOPES, OAUTH2_CREDENTIALS_FILE, TOKEN_FILE_NAME
+from .config import settings
 
 
 class AuthenticationError(Exception):
@@ -14,13 +15,10 @@ class AuthenticationError(Exception):
     pass
 
 
-def get_credentials(data_dir: str) -> Any:
+def get_credentials() -> Any:
     """
-    Retrieves the authentication credentials for the specified data_dir by either loading
-    them from the token file or by running the authentication flow.
-
-    Args:
-        data_dir (str): The path where to store data.
+    Retrieves the authentication credentials by either loading them from the token file 
+    or by running the authentication flow. Uses data directory from settings.
 
     Returns:
         Any: The authentication credentials (compatible with Google API clients).
@@ -40,6 +38,10 @@ def get_credentials(data_dir: str) -> Any:
             f"and saved them as '{OAUTH2_CREDENTIALS_FILE}' in the project root directory."
         )
 
+    data_dir = settings.get("DATA_DIR")
+    if not data_dir:
+        raise AuthenticationError("DATA_DIR not configured in settings")
+    
     token_file_path = os.path.join(data_dir, TOKEN_FILE_NAME)
     creds: Optional[Any] = None
 

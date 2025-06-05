@@ -1,5 +1,5 @@
 """
-Multi-turn chat interface using CrewAI agents for Gmail data analysis.
+Multi-turn chat interface using AI agents for Gmail data analysis.
 
 This module provides an interactive chat CLI where users can have ongoing
 conversations with AI agents specialized in analyzing Gmail data.
@@ -8,22 +8,55 @@ conversations with AI agents specialized in analyzing Gmail data.
 import logging
 import os
 import sqlite3
+import sys
 from typing import List, Optional
 
-from crewai import Agent, Task, Crew, Process
-from crewai.llm import LLM
+from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import BaseTool
 
 from .constants import DATABASE_FILE_NAME
+from .config import settings
 
 
 logger = logging.getLogger(__name__)
+
+
+# Model mapping from simple names to full model identifiers
+MODEL_MAP = {
+    "gemini": "gemini/gemini-2.0-flash-exp",
+    "openai": "openai/gpt-4o",
+    "claude": "anthropic/claude-4-sonnet-2024-05-22",
+}
+
+# Model descriptions for display
+MODEL_DESCRIPTIONS = {
+    "gemini": "Gemini 2.0 Flash (Fast & Cheap)",
+    "openai": "OpenAI GPT-4o (Balanced)",
+    "claude": "Claude 4 Sonnet (Most Capable)",
+}
 
 
 class ChatError(Exception):
     """Custom exception for chat-related errors."""
 
     pass
+
+
+def setup_chat_logging() -> None:
+    """Configure logging for chat mode to reduce noise from LiteLLM and other libraries."""
+    # Suppress verbose logging from external libraries
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+    logging.getLogger("litellm").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("crewai").setLevel(logging.WARNING)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+    logging.getLogger("google").setLevel(logging.WARNING)
+
+    # Keep our own logger at INFO level
+    logging.getLogger("gmail_to_sqlite").setLevel(logging.INFO)
 
 
 class SQLiteTool(BaseTool):
@@ -61,7 +94,7 @@ class SQLiteTool(BaseTool):
 
     def __init__(self, db_path: str, **kwargs):
         super().__init__(**kwargs)
-        self._db_path = db_path  # Use private attribute to store the path
+        self._db_path = db_path
 
     def _run(self, query: str) -> str:
         """
@@ -81,15 +114,30 @@ class SQLiteTool(BaseTool):
                 for cmd in ["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"]
             ):
                 sql_query = query
+                print(
+                    f"🔍 Executing SQL: {sql_query[:100]}{'...' if len(sql_query) > 100 else ''}"
+                )
             else:
                 # Convert natural language to SQL
                 sql_query = self._natural_language_to_sql(query)
+                print(f"🔄 Converted '{query}' to SQL:")
+                print(f"   {sql_query}")
 
             # Execute the query
-            return self._execute_sql_query(sql_query)
+            result = self._execute_sql_query(sql_query)
+
+            lines = result.split("\n")
+            result_preview = "\n".join(lines[:5])
+            if len(lines) > 5:
+                result_preview += f"\n   ... ({len(lines) - 5} more lines)"
+            print(f"📊 Query returned: {result_preview}")
+
+            return result
 
         except Exception as e:
-            return f"Error: {str(e)}"
+            error_msg = f"Error: {str(e)}"
+            print(f"❌ SQL Error: {error_msg}")
+            return error_msg
 
     def _natural_language_to_sql(self, question: str) -> str:
         """
@@ -100,88 +148,98 @@ class SQLiteTool(BaseTool):
         """
         question_lower = question.lower()
 
+        # Extract year filters if present
+        year_filter = ""
+        for year in range(2000, 2030):
+            if str(year) in question_lower:
+                year_filter = f" AND strftime('%Y', timestamp) = '{year}'"
+                break
+
         # Common patterns
         if (
             "who sends me the most emails" in question_lower
             or "top senders" in question_lower
         ):
-            return """
+            return f"""
             SELECT sender->>'$.email' as sender_email, 
                    sender->>'$.name' as sender_name,
                    COUNT(*) as email_count
             FROM messages 
-            WHERE is_outgoing = 0
+            WHERE is_outgoing = 0{year_filter}
             GROUP BY sender->>'$.email', sender->>'$.name'
             ORDER BY email_count DESC 
             LIMIT 10
             """
 
         elif "unread" in question_lower:
-            return "SELECT COUNT(*) as unread_count FROM messages WHERE is_read = 0"
+            return f"SELECT COUNT(*) as unread_count FROM messages WHERE is_read = 0{year_filter}"
 
         elif "last week" in question_lower or "past week" in question_lower:
-            return """
+            return f"""
             SELECT subject, sender->>'$.email' as sender, timestamp
             FROM messages 
-            WHERE timestamp >= date('now', '-7 days')
+            WHERE timestamp >= date('now', '-7 days'){year_filter}
             ORDER BY timestamp DESC
             LIMIT 20
             """
 
         elif "last month" in question_lower or "past month" in question_lower:
-            return """
+            return f"""
             SELECT subject, sender->>'$.email' as sender, timestamp
             FROM messages 
-            WHERE timestamp >= date('now', '-30 days')
+            WHERE timestamp >= date('now', '-30 days'){year_filter}
             ORDER BY timestamp DESC
             LIMIT 20
             """
 
         elif "today" in question_lower:
-            return """
+            return f"""
             SELECT subject, sender->>'$.email' as sender, timestamp
             FROM messages 
-            WHERE date(timestamp) = date('now')
+            WHERE date(timestamp) = date('now'){year_filter}
             ORDER BY timestamp DESC
             """
 
         elif "labels" in question_lower and (
             "most common" in question_lower or "frequent" in question_lower
         ):
-            return """
+            return f"""
             SELECT json_extract(label.value, '$') as label_name, COUNT(*) as count
             FROM messages, json_each(messages.labels) as label
+            WHERE 1=1{year_filter}
             GROUP BY label_name
             ORDER BY count DESC
             LIMIT 10
             """
 
         elif "total" in question_lower and "emails" in question_lower:
-            return "SELECT COUNT(*) as total_emails FROM messages"
+            return (
+                f"SELECT COUNT(*) as total_emails FROM messages WHERE 1=1{year_filter}"
+            )
 
         elif "sent" in question_lower and (
             "by me" in question_lower or "outgoing" in question_lower
         ):
-            return "SELECT COUNT(*) as sent_emails FROM messages WHERE is_outgoing = 1"
+            return f"SELECT COUNT(*) as sent_emails FROM messages WHERE is_outgoing = 1{year_filter}"
 
         elif "received" in question_lower or "incoming" in question_lower:
-            return (
-                "SELECT COUNT(*) as received_emails FROM messages WHERE is_outgoing = 0"
-            )
+            return f"SELECT COUNT(*) as received_emails FROM messages WHERE is_outgoing = 0{year_filter}"
 
         elif "largest" in question_lower and "emails" in question_lower:
-            return """
+            return f"""
             SELECT subject, sender->>'$.email' as sender, size, timestamp
             FROM messages 
+            WHERE 1=1{year_filter}
             ORDER BY size DESC
             LIMIT 10
             """
 
         else:
             # Default: return a helpful query showing recent emails
-            return """
+            return f"""
             SELECT subject, sender->>'$.email' as sender, timestamp, is_read
             FROM messages 
+            WHERE 1=1{year_filter}
             ORDER BY timestamp DESC
             LIMIT 10
             """
@@ -241,25 +299,55 @@ class SQLiteTool(BaseTool):
 class EmailAnalysisAgent:
     """CrewAI agent specialized in email data analysis."""
 
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        model_name: str = "gemini/gemini-2.0-flash-exp",
+    ):
         """
         Initialize the email analysis agent.
 
         Args:
             db_path (str): Path to the SQLite database file.
+            model_name (str): The LLM model to use.
         """
         self.db_path = db_path
         self.conversation_history: List[str] = []
+        self.model_name = model_name
 
-        # Initialize OpenAI LLM for CrewAI
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ChatError(
-                "OpenAI API key not found. Please set the OPENAI_API_KEY environment variable."
-            )
+        # Initialize LLM based on model choice
+        if model_name.startswith("gemini/"):
+            api_key = settings.get("GOOGLE_API_KEY")
+            if not api_key:
+                raise ChatError(
+                    "Google API key not found. Please set the GOOGLE_API_KEY in .secrets.toml.\n\n"
+                    "Configuration:\n"
+                    'Add to .secrets.toml: GOOGLE_API_KEY = "your-key-here"\n\n'
+                    "Get your API key from: https://aistudio.google.com/app/apikey"
+                )
+        elif model_name.startswith("openai/"):
+            api_key = settings.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ChatError(
+                    "OpenAI API key not found. Please set the OPENAI_API_KEY in .secrets.toml.\n\n"
+                    "Configuration:\n"
+                    'Add to .secrets.toml: OPENAI_API_KEY = "your-key-here"\n\n'
+                    "Get your API key from: https://platform.openai.com/api-keys"
+                )
+        elif model_name.startswith("anthropic/"):
+            api_key = settings.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ChatError(
+                    "Anthropic API key not found. Please set the ANTHROPIC_API_KEY in .secrets.toml.\n\n"
+                    "Configuration:\n"
+                    'Add to .secrets.toml: ANTHROPIC_API_KEY = "your-key-here"\n\n'
+                    "Get your API key from: https://console.anthropic.com/"
+                )
+        else:
+            raise ChatError(f"Unsupported model: {model_name}")
 
         # Create the LLM instance for CrewAI
-        self.llm = LLM(model="openai/gpt-4.1", api_key=api_key, temperature=0.1)
+        self.llm = LLM(model=model_name, api_key=api_key, temperature=0.1)
 
         # Initialize the custom SQLite tool
         self.sqlite_tool = SQLiteTool(db_path=db_path)
@@ -341,6 +429,9 @@ class EmailAnalysisAgent:
             str: The agent's response.
         """
         try:
+            # Show progress indicator
+            print(f"🤔 Processing your question...")
+
             # Add user message to conversation history
             self.conversation_history.append(f"User: {user_message}")
 
@@ -400,13 +491,66 @@ class EmailAnalysisAgent:
             return error_msg
 
 
-def start_chat(data_dir: str) -> None:
+def get_model_name(model_key: str) -> str:
     """
-    Start an interactive chat session with the email analysis agent.
+    Get the full model name from a simple key.
 
     Args:
-        data_dir (str): Directory containing the Gmail database.
+        model_key (str): Simple model key (gemini, openai, claude)
+
+    Returns:
+        str: Full model identifier
     """
+    return MODEL_MAP.get(model_key, MODEL_MAP["gemini"])
+
+
+def show_model_options() -> str:
+    """
+    Display available models and let user choose.
+    Used only when no model is specified via CLI.
+
+    Returns:
+        str: The selected model name.
+    """
+    models = {
+        "1": ("gemini", "Gemini 2.0 Flash (Default - Fast & Cheap)"),
+        "2": ("openai", "OpenAI GPT-4o (Balanced)"),
+        "3": ("claude", "Claude 3.5 Sonnet (Most Capable)"),
+    }
+
+    print("\n🤖 Available AI Models:")
+    for key, (model_key, description) in models.items():
+        print(f"   {key}. {description}")
+
+    while True:
+        choice = input("\nSelect model (1-3) or press Enter for default: ").strip()
+
+        if not choice:  # Default
+            return get_model_name("gemini")
+
+        if choice in models:
+            selected_model_key = models[choice][0]
+            print(f"✅ Selected: {models[choice][1]}")
+            return get_model_name(selected_model_key)
+
+        print("❌ Invalid choice. Please select 1, 2, or 3.")
+
+
+def start_chat(model: str = "gemini") -> None:
+    """
+    Start an interactive chat session with the email analysis agent.
+    Uses data directory from settings.
+
+    Args:
+        model (str): Model key to use (gemini, openai, claude).
+    """
+    # Configure chat-specific logging
+    setup_chat_logging()
+
+    data_dir = settings.get("DATA_DIR")
+    if not data_dir:
+        raise ChatError("DATA_DIR not configured in settings")
+
     db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
 
     # Check if database exists
@@ -416,9 +560,16 @@ def start_chat(data_dir: str) -> None:
         return
 
     try:
-        # Initialize the agent
-        print("🤖 Initializing Gmail Analysis Agent...")
-        agent = EmailAnalysisAgent(db_path)
+        # Get the full model name
+        model_name = get_model_name(model)
+        model_description = MODEL_DESCRIPTIONS.get(model, "Unknown Model")
+
+        print(f"🤖 Using {model_description}")
+        print("✅ Tool usage enabled - you'll see SQL queries and results")
+
+        # Initialize the agent with selected model
+        print(f"\n🤖 Initializing Gmail Analysis Agent...")
+        agent = EmailAnalysisAgent(db_path, model_name=model_name)
 
         print("✅ Agent ready! You can now chat about your Gmail data.")
         print("💡 Try asking things like:")
@@ -426,7 +577,10 @@ def start_chat(data_dir: str) -> None:
         print("   - 'Show me emails from last week'")
         print("   - 'What are my most common email labels?'")
         print("   - 'How many unread emails do I have?'")
-        print("\n📝 Type 'exit' or 'quit' to end the conversation.\n")
+        print("   - 'Who emailed me most in 2023?'")
+        print("\n📝 Type 'exit' or 'quit' to end the conversation.")
+        print("🔧 Type 'model' to switch AI models.")
+        print()
 
         while True:
             try:
@@ -437,6 +591,17 @@ def start_chat(data_dir: str) -> None:
                 if user_input.lower() in ["exit", "quit", "bye"]:
                     print("👋 Goodbye! Thanks for chatting about your Gmail data.")
                     break
+
+                # Check for model switch command
+                if user_input.lower() == "model":
+                    print("🔧 Switching AI model...")
+                    new_model_name = show_model_options()
+                    try:
+                        agent = EmailAnalysisAgent(db_path, model_name=new_model_name)
+                        print("✅ Model switched successfully!")
+                    except Exception as e:
+                        print(f"❌ Failed to switch model: {e}")
+                    continue
 
                 if not user_input:
                     continue
@@ -461,24 +626,36 @@ def start_chat(data_dir: str) -> None:
         logger.error(f"Unexpected error in chat: {e}")
 
 
-def ask_single_question(data_dir: str, question: str) -> str:
+def ask_single_question(
+    question: str,
+    model: str = "gemini",
+) -> str:
     """
     Ask a single question to the agent without starting interactive chat.
+    Uses data directory from settings.
 
     Args:
-        data_dir (str): Directory containing the Gmail database.
         question (str): The question to ask.
+        model (str): Model key to use (gemini, openai, claude).
 
     Returns:
         str: The agent's response.
     """
+    # Configure chat-specific logging for single questions too
+    setup_chat_logging()
+
+    data_dir = settings.get("DATA_DIR")
+    if not data_dir:
+        return "❌ DATA_DIR not configured in settings"
+
     db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
 
     if not os.path.exists(db_path):
         return f"❌ Database not found at {db_path}. Please sync your Gmail data first."
 
     try:
-        agent = EmailAnalysisAgent(db_path)
+        model_name = get_model_name(model)
+        agent = EmailAnalysisAgent(db_path, model_name=model_name)
         return agent.chat(question)
     except Exception as e:
         return f"❌ Error: {e}"

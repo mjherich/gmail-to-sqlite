@@ -1,14 +1,14 @@
 import argparse
 import logging
 import os
+import pathlib
 import signal
 import sys
 from typing import Any, Callable, List, Optional
 
-from dotenv import load_dotenv
-
 from . import auth, db, sync, chat
 from .constants import DEFAULT_WORKERS, LOG_FORMAT
+from .config import settings
 
 
 class ApplicationError(Exception):
@@ -99,11 +99,16 @@ Commands:
   sync-deleted-messages    Detect and mark deleted messages
   chat                     Interactive chat with Gmail analysis agent or ask single question
 
+Configuration:
+  Data directory is configured in .secrets.toml file.
+
 Examples:
   %(prog)s sync
   %(prog)s sync --full-sync
   %(prog)s sync-message --message-id abc123
   %(prog)s chat --question "Who sent me the most emails?"
+  %(prog)s chat --model openai
+  %(prog)s chat -m claude
   %(prog)s chat
         """,
     )
@@ -113,10 +118,7 @@ Examples:
         choices=["sync", "sync-message", "sync-deleted-messages", "chat"],
         help="The command to run",
     )
-    parser.add_argument(
-        "--data-dir",
-        help="The path where the data should be stored (can also be set via GMAIL_DATA_DIR environment variable)",
-    )
+
     parser.add_argument(
         "--full-sync",
         action="store_true",
@@ -143,15 +145,20 @@ Examples:
         help=f"Number of worker threads for parallel fetching (default: {DEFAULT_WORKERS})",
     )
 
+    parser.add_argument(
+        "--model",
+        "-m",
+        choices=["gemini", "openai", "claude"],
+        default="gemini",
+        help="AI model to use for chat (default: gemini)",
+    )
+
     return parser
 
 
 def main() -> None:
     """Main application entry point."""
     setup_logging()
-
-    # Load environment variables
-    load_dotenv()
 
     try:
         parser = create_argument_parser()
@@ -161,18 +168,16 @@ def main() -> None:
         if args.command == "sync-message" and not args.message_id:
             parser.error("--message-id is required for sync-message command")
 
-        # Get data directory from args or environment variable
-        data_dir = args.data_dir or os.getenv("GMAIL_DATA_DIR")
+        # Get data directory from Dynaconf settings only
+        data_dir = settings.get("DATA_DIR")
         if not data_dir:
-            parser.error(
-                "--data-dir is required or set GMAIL_DATA_DIR environment variable"
-            )
+            parser.error("DATA_DIR must be configured in .secrets.toml file")
 
         prepare_data_dir(data_dir)
 
         # Only get credentials for commands that need them
         if args.command != "chat":
-            credentials = auth.get_credentials(data_dir)
+            credentials = auth.get_credentials()
 
         # Set up shutdown handling
         shutdown_state = [False]
@@ -189,16 +194,18 @@ def main() -> None:
                 # Chat command - either single question or interactive chat
                 if args.question:
                     # Single question mode
-                    response = chat.ask_single_question(data_dir, args.question)
+                    response = chat.ask_single_question(args.question, model=args.model)
                     print(response)
                 else:
                     # Interactive chat mode
-                    chat.start_chat(data_dir)
+                    chat.start_chat(model=args.model)
             elif args.command == "sync":
+                # Initialize database first
+                db.init()
+
                 # Build sync statistics
-                sync_stats = sync.sync_gmail_messages(
+                sync_count = sync.all_messages(
                     credentials,
-                    data_dir,
                     args.full_sync,
                     args.workers,
                     check_shutdown,
@@ -206,37 +213,26 @@ def main() -> None:
 
                 # Display results summary
                 print(f"Sync completed successfully!")
-                print(f"New messages synced: {sync_stats.new_messages}")
-                print(f"Updated messages: {sync_stats.updated_messages}")
-
-                if sync_stats.deleted_messages > 0:
-                    print(f"Deleted messages detected: {sync_stats.deleted_messages}")
-
-                if sync_stats.errors:
-                    print(f"Errors encountered: {len(sync_stats.errors)}")
-                    for error in sync_stats.errors[:5]:  # Show first 5 errors
-                        print(f"  - {error}")
-                    if len(sync_stats.errors) > 5:
-                        print(f"  ... and {len(sync_stats.errors) - 5} more")
+                print(f"Total messages synced: {sync_count}")
 
             elif args.command == "sync-message":
+                # Initialize database first
+                db.init()
+
                 try:
-                    success = sync.sync_single_message(
-                        credentials, data_dir, args.message_id
-                    )
-                    if success:
-                        print(f"Message {args.message_id} synced successfully!")
-                    else:
-                        print(f"Failed to sync message {args.message_id}")
-                        sys.exit(1)
+                    sync.single_message(credentials, args.message_id, check_shutdown)
+                    print(f"Message {args.message_id} synced successfully!")
                 except sync.SyncError as e:
                     logging.error(f"Sync error: {e}")
                     sys.exit(1)
 
             elif args.command == "sync-deleted-messages":
+                # Initialize database first
+                db.init()
+
                 try:
                     deleted_count = sync.sync_deleted_messages(
-                        credentials, data_dir, check_shutdown
+                        credentials, check_shutdown
                     )
                     print(f"Marked {deleted_count} messages as deleted")
                 except sync.SyncError as e:

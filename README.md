@@ -24,14 +24,16 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 
 ### Setup
 
-#### Option 1: Global Installation with pipx (Recommended)
+#### Option 1: Global Installation with uv (Recommended)
 
 ```bash
-# Install from source with pipx (package not yet on PyPI)
+# Install from source with uv tool install (package not yet on PyPI)
 git clone https://github.com/marcboeker/gmail-to-sqlite.git
 cd gmail-to-sqlite
-pipx install .
+uv tool install .
 ```
+
+**Note**: `uv tool install` automatically handles dependency resolution with the correct versions from the lock file. This is the modern replacement for pipx.
 
 #### Option 2: Development Setup
 
@@ -59,79 +61,92 @@ pipx install .
    - Create OAuth 2.0 credentials (Desktop application)
    - Download the credentials file and save it as `credentials.json` in the project root directory
 
-2. **Set up OpenAI API key (for AI features):**
-   - Get an API key from [OpenAI](https://platform.openai.com/api-keys)
-   - Set environment variable: `export OPENAI_API_KEY=your-openai-api-key-here`
-   - Or create a `.env` file in your data directory with `OPENAI_API_KEY=your-openai-api-key-here`
+2. **Set up AI API keys (for chat features):**
+
+   The application supports multiple AI models: OpenAI GPT-4o, Google Gemini, and Anthropic Claude. You need at least one API key to use the chat functionality.
+
+   ```bash
+   # Copy the example file and add your actual configuration
+   cp .secrets.toml.example .secrets.toml
+   # Edit .secrets.toml with your actual data directory and API keys
+   ```
+
+   The `.secrets.toml` file should contain:
+
+   ```toml
+   # Data directory where SQLite database and credentials will be stored
+   DATA_DIR = "/path/to/your/gmail-data"
+
+   # At least one of these is required for chat functionality
+   OPENAI_API_KEY = "your-openai-api-key-here"       # Get from: https://platform.openai.com/api-keys
+   GOOGLE_API_KEY = "your-google-api-key-here"       # Get from: https://aistudio.google.com/app/apikey
+   ANTHROPIC_API_KEY = "your-anthropic-api-key-here" # Get from: https://console.anthropic.com/
+   ```
 
 ## Usage
 
 ### Configuration
 
-You can configure the application in two ways:
-
-1. **Environment Variables**: Create a `.env` file (copy from `.env.example`)
-2. **Command Line Arguments**: Use command-line flags like `--data-dir`
+The application loads configuration from `.secrets.toml` and `settings.toml` files in the project directory. This allows the CLI to work from **any directory** while finding your configuration automatically.
 
 ```bash
-# Copy the example configuration
-cp .env.example .env
+# Set up data directory and API keys using the secrets file
+cd /path/to/gmail-to-sqlite
+cp .secrets.toml.example .secrets.toml
+# Edit .secrets.toml with your actual data directory and API keys
 
-# Edit .env to set your data directory and OpenAI API key
-# GMAIL_DATA_DIR=./data
-# OPENAI_API_KEY=your-openai-api-key-here
+# You can now run from anywhere!
+gmail-to-sqlite sync
 ```
 
 ### Basic Commands
 
-If you installed with pipx (Option 1):
+If you installed with uv tool install (global installation):
 
 ```bash
-# Incremental sync (default) - using environment variable
+# Incremental sync (default) - reads data directory from .secrets.toml
 gmail-to-sqlite sync
 
-# Incremental sync with command line argument
-gmail-to-sqlite sync --data-dir ./data
-
 # Full sync with deletion detection
-gmail-to-sqlite sync --data-dir ./data --full-sync
+gmail-to-sqlite sync --full-sync
 
 # Sync a specific message
-gmail-to-sqlite sync-message --data-dir ./data --message-id MESSAGE_ID
+gmail-to-sqlite sync-message --message-id MESSAGE_ID
 
 # Detect and mark deleted messages only
-gmail-to-sqlite sync-deleted-messages --data-dir ./data
+gmail-to-sqlite sync-deleted-messages
 
 # Use custom number of worker threads
-gmail-to-sqlite sync --data-dir ./data --workers 8
+gmail-to-sqlite sync --workers 8
 
 # Ask natural language questions about your emails (single question mode)
-gmail-to-sqlite chat --data-dir ./data --question "Who sent me the most emails?"
+gmail-to-sqlite chat --question "Who sent me the most emails?"
 
 # Ask with custom result limit (single question mode)
-gmail-to-sqlite chat --data-dir ./data --question "Show me unread emails from last week" --max-rows 10
+gmail-to-sqlite chat --question "Show me unread emails from last week" --max-rows 10
 
 # Start interactive chat session
-gmail-to-sqlite chat --data-dir ./data
+gmail-to-sqlite chat
 ```
 
-If you're using the development setup (Option 2):
+If you're using the development setup:
 
 ```bash
 # Use python -m gmail_to_sqlite instead of gmail-to-sqlite
-python -m gmail_to_sqlite sync --data-dir ./data
-python -m gmail_to_sqlite chat --data-dir ./data
+python -m gmail_to_sqlite sync
+python -m gmail_to_sqlite chat
 ```
 
 ### Command Line Arguments
 
 - `command`: Required. One of `sync`, `sync-message`, `sync-deleted-messages`, or `chat`
-- `--data-dir`: Optional. Directory where the SQLite database will be stored (can also be set via `GMAIL_DATA_DIR` environment variable)
 - `--full-sync`: Optional. Forces a complete sync of all messages
 - `--message-id`: Required for `sync-message`. The ID of a specific message to sync
 - `--question`: Optional for `chat`. Natural language question about your emails (if provided, asks question and exits; if not provided, starts interactive chat)
 - `--max-rows`: Optional. Maximum number of rows to display in query results (default: 20)
 - `--workers`: Optional. Number of worker threads (default: number of CPU cores)
+
+**Note**: Data directory is configured in `.secrets.toml`, not via command line arguments.
 
 ### Graceful Shutdown
 
@@ -170,22 +185,22 @@ The `chat` command with the `--question` parameter allows you to ask single ques
 
 ```bash
 # Find your top email senders
-gmail-to-sqlite chat --data-dir ./data --question "Who are the top 10 people who sent me emails?"
+gmail-to-sqlite chat --question "Who are the top 10 people who sent me emails?"
 
 # Find emails about specific topics
-gmail-to-sqlite chat --data-dir ./data --question "Show me emails about meetings from last month"
+gmail-to-sqlite chat --question "Show me emails about meetings from last month"
 
 # Check unread emails
-gmail-to-sqlite chat --data-dir ./data --question "How many unread emails do I have?"
+gmail-to-sqlite chat --question "How many unread emails do I have?"
 
 # Find emails by size
-gmail-to-sqlite chat --data-dir ./data --question "Show me the largest emails I've received"
+gmail-to-sqlite chat --question "Show me the largest emails I've received"
 
 # Time-based queries
-gmail-to-sqlite chat --data-dir ./data --question "How many emails did I receive each day this week?"
+gmail-to-sqlite chat --question "How many emails did I receive each day this week?"
 
 # Find emails from specific domains
-gmail-to-sqlite chat --data-dir ./data --question "Show me all emails from gmail.com addresses"
+gmail-to-sqlite chat --question "Show me all emails from gmail.com addresses"
 ```
 
 The AI agent will automatically convert your natural language question into a SQL query and execute it against your email database.
@@ -196,7 +211,7 @@ The `chat` command starts an interactive conversational interface powered by Cre
 
 ```bash
 # Start interactive chat session
-gmail-to-sqlite chat --data-dir ./data
+gmail-to-sqlite chat
 ```
 
 Example conversation:

@@ -9,6 +9,9 @@ token.json
 *.sqlite3
 data/
 
+# Contains API keys and other sensitive data
+.secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]
@@ -35,7 +38,6 @@ MANIFEST
 # Virtual environments
 .venv/
 venv/
-.env
 
 # IDE
 .vscode/

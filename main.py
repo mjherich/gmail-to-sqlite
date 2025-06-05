@@ -7,6 +7,7 @@ from typing import Any, Callable, List, Optional
 
 from gmail_to_sqlite import auth, db, sync, chat
 from gmail_to_sqlite.constants import DEFAULT_WORKERS, LOG_FORMAT
+from gmail_to_sqlite.config import settings
 
 
 class ApplicationError(Exception):
@@ -15,16 +16,18 @@ class ApplicationError(Exception):
     pass
 
 
-def prepare_data_dir(data_dir: str) -> None:
+def prepare_data_dir() -> None:
     """
     Create the data directory if it doesn't exist.
-
-    Args:
-        data_dir (str): The path where to store data.
+    Uses data directory from settings.
 
     Raises:
         ApplicationError: If directory creation fails.
     """
+    data_dir = settings.get("DATA_DIR")
+    if not data_dir:
+        raise ApplicationError("DATA_DIR not configured in settings")
+
     try:
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
@@ -97,12 +100,17 @@ Commands:
   sync-deleted-messages    Detect and mark deleted messages
   chat                     Interactive chat with Gmail analysis agent or ask single question
 
+Configuration:
+  Data directory is configured in .secrets.toml file.
+
 Examples:
-  %(prog)s sync --data-dir ./data
-  %(prog)s sync --data-dir ./data --full-sync
-  %(prog)s sync-message --data-dir ./data --message-id abc123
-  %(prog)s chat --data-dir ./data --question "Who sent me the most emails?"
-  %(prog)s chat --data-dir ./data
+  %(prog)s sync
+  %(prog)s sync --full-sync
+  %(prog)s sync-message --message-id abc123
+  %(prog)s chat --question "Who sent me the most emails?"
+  %(prog)s chat --model openai
+  %(prog)s chat -m claude
+  %(prog)s chat
         """,
     )
 
@@ -110,10 +118,6 @@ Examples:
         "command",
         choices=["sync", "sync-message", "sync-deleted-messages", "chat"],
         help="The command to run",
-    )
-    parser.add_argument(
-        "--data-dir",
-        help="The path where the data should be stored (can also be set via GMAIL_DATA_DIR environment variable)",
     )
     parser.add_argument(
         "--full-sync",
@@ -141,6 +145,14 @@ Examples:
         help=f"Number of worker threads for parallel fetching (default: {DEFAULT_WORKERS})",
     )
 
+    parser.add_argument(
+        "--model",
+        "-m",
+        choices=["gemini", "openai", "claude"],
+        default="gemini",
+        help="AI model to use for chat (default: gemini)",
+    )
+
     return parser
 
 
@@ -152,22 +164,20 @@ def main() -> None:
         parser = create_argument_parser()
         args = parser.parse_args()
 
-        # Handle data directory - can come from args or environment variable
-        data_dir = args.data_dir or os.environ.get("GMAIL_DATA_DIR")
+        # Get data directory from Dynaconf settings only
+        data_dir = settings.get("DATA_DIR")
         if not data_dir:
-            parser.error(
-                "--data-dir is required or set GMAIL_DATA_DIR environment variable"
-            )
+            parser.error("DATA_DIR must be configured in .secrets.toml file")
 
         # Validate command-specific arguments
         if args.command == "sync-message" and not args.message_id:
             parser.error("--message-id is required for sync-message command")
 
-        prepare_data_dir(data_dir)
+        prepare_data_dir()
 
         # Only get credentials for commands that need them
         if args.command != "chat":
-            credentials = auth.get_credentials(data_dir)
+            credentials = auth.get_credentials()
 
         # Set up shutdown handling
         shutdown_state = [False]
@@ -185,17 +195,19 @@ def main() -> None:
                 try:
                     if args.question:
                         # Single question mode - ask and exit
-                        response = chat.ask_single_question(data_dir, args.question)
+                        response = chat.ask_single_question(
+                            args.question, model=args.model
+                        )
                         print(response)
                     else:
                         # Interactive chat mode
-                        chat.start_chat(data_dir)
+                        chat.start_chat(model=args.model)
                 except chat.ChatError as e:
                     logging.error(f"Chat failed: {e}")
                     sys.exit(1)
             else:
                 # For other commands, we need credentials and database connection
-                db_conn = db.init(data_dir)
+                db_conn = db.init()
 
                 if args.command == "sync":
                     sync.all_messages(

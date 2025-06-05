@@ -14,6 +14,7 @@ from peewee import (
 from playhouse.sqlite_ext import JSONField, SqliteDatabase
 
 from .constants import DATABASE_FILE_NAME
+from .config import settings
 
 database_proxy = Proxy()
 
@@ -86,12 +87,11 @@ class Message(Model):
         db_table = "messages"
 
 
-def init(data_dir: str, enable_logging: bool = False) -> SqliteDatabase:
+def init(enable_logging: bool = False) -> SqliteDatabase:
     """
-    Initialize the database for the given data_dir.
+    Initialize the database using data directory from settings.
 
     Args:
-        data_dir (str): The path where to store the data.
         enable_logging (bool, optional): Whether to enable logging. Defaults to False.
 
     Returns:
@@ -101,6 +101,10 @@ def init(data_dir: str, enable_logging: bool = False) -> SqliteDatabase:
         DatabaseError: If database initialization fails.
     """
     try:
+        data_dir = settings.get("DATA_DIR")
+        if not data_dir:
+            raise DatabaseError("DATA_DIR not configured in settings")
+        
         db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
         db = SqliteDatabase(db_path)
         database_proxy.initialize(db)

@@ -29,8 +29,16 @@ def get_credentials(data_dir: str) -> Any:
         AuthenticationError: If credentials cannot be obtained or are invalid.
         FileNotFoundError: If the OAuth2 credentials file is not found.
     """
-    if not os.path.exists(OAUTH2_CREDENTIALS_FILE):
-        raise FileNotFoundError(f"{OAUTH2_CREDENTIALS_FILE} not found")
+    # Look for credentials.json in the package root directory
+    package_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    credentials_file_path = os.path.join(package_dir, OAUTH2_CREDENTIALS_FILE)
+
+    if not os.path.exists(credentials_file_path):
+        raise FileNotFoundError(
+            f"{OAUTH2_CREDENTIALS_FILE} not found at {credentials_file_path}\n\n"
+            f"Please ensure you have downloaded your OAuth 2.0 credentials from the Google Cloud Console "
+            f"and saved them as '{OAUTH2_CREDENTIALS_FILE}' in the project root directory."
+        )
 
     token_file_path = os.path.join(data_dir, TOKEN_FILE_NAME)
     creds: Optional[Any] = None
@@ -52,7 +60,7 @@ def get_credentials(data_dir: str) -> Any:
         else:
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    OAUTH2_CREDENTIALS_FILE, GMAIL_SCOPES
+                    credentials_file_path, GMAIL_SCOPES
                 )
                 # The flow returns credentials that may be of different types
                 # but all are compatible with the API usage

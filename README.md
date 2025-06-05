@@ -24,6 +24,17 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 
 ### Setup
 
+#### Option 1: Global Installation with pipx (Recommended)
+
+```bash
+# Install from source with pipx (package not yet on PyPI)
+git clone https://github.com/marcboeker/gmail-to-sqlite.git
+cd gmail-to-sqlite
+pipx install .
+```
+
+#### Option 2: Development Setup
+
 1. **Clone the repository:**
 
    ```bash
@@ -38,18 +49,20 @@ A robust Python application that syncs Gmail messages to a local SQLite database
    uv sync
    ```
 
-3. **Set up Gmail API credentials:**
+#### Common Setup (Both Options)
+
+1. **Set up Gmail API credentials:**
 
    - Go to the [Google Cloud Console](https://console.cloud.google.com/)
    - Create a new project or select an existing one
    - Enable the Gmail API
    - Create OAuth 2.0 credentials (Desktop application)
-   - Download the credentials file and save it as `credentials.json` in the project root
+   - Download the credentials file and save it as `credentials.json` in the project root directory
 
-4. **Set up OpenAI API key (for AI features):**
+2. **Set up OpenAI API key (for AI features):**
    - Get an API key from [OpenAI](https://platform.openai.com/api-keys)
-   - Copy `.env.example` to `.env`: `cp .env.example .env`
-   - Edit `.env` and add your OpenAI API key
+   - Set environment variable: `export OPENAI_API_KEY=your-openai-api-key-here`
+   - Or create a `.env` file in your data directory with `OPENAI_API_KEY=your-openai-api-key-here`
 
 ## Usage
 
@@ -71,46 +84,43 @@ cp .env.example .env
 
 ### Basic Commands
 
+If you installed with pipx (Option 1):
+
 ```bash
 # Incremental sync (default) - using environment variable
-python -m gmail_to_sqlite sync
+gmail-to-sqlite sync
 
 # Incremental sync with command line argument
-python -m gmail_to_sqlite sync --data-dir ./data
+gmail-to-sqlite sync --data-dir ./data
 
 # Full sync with deletion detection
-python -m gmail_to_sqlite sync --data-dir ./data --full-sync
+gmail-to-sqlite sync --data-dir ./data --full-sync
 
 # Sync a specific message
-python -m gmail_to_sqlite sync-message --data-dir ./data --message-id MESSAGE_ID
+gmail-to-sqlite sync-message --data-dir ./data --message-id MESSAGE_ID
 
 # Detect and mark deleted messages only
-python -m gmail_to_sqlite sync-deleted-messages --data-dir ./data
+gmail-to-sqlite sync-deleted-messages --data-dir ./data
 
 # Use custom number of worker threads
-python -m gmail_to_sqlite sync --data-dir ./data --workers 8
+gmail-to-sqlite sync --data-dir ./data --workers 8
 
 # Ask natural language questions about your emails (single question mode)
-python -m gmail_to_sqlite chat --data-dir ./data --question "Who sent me the most emails?"
+gmail-to-sqlite chat --data-dir ./data --question "Who sent me the most emails?"
 
 # Ask with custom result limit (single question mode)
-python -m gmail_to_sqlite chat --data-dir ./data --question "Show me unread emails from last week" --max-rows 10
+gmail-to-sqlite chat --data-dir ./data --question "Show me unread emails from last week" --max-rows 10
 
 # Start interactive chat session
-python -m gmail_to_sqlite chat --data-dir ./data
+gmail-to-sqlite chat --data-dir ./data
 ```
 
-### Alternative: Install and Use CLI Command
+If you're using the development setup (Option 2):
 
 ```bash
-# Install the package
-pip install -e .
-
-# Now you can use the CLI command directly
-gmail-to-sqlite sync
-gmail-to-sqlite sync --data-dir ./data --full-sync
-gmail-to-sqlite chat --data-dir ./data --question "Show me emails about meetings"
-gmail-to-sqlite chat --data-dir ./data
+# Use python -m gmail_to_sqlite instead of gmail-to-sqlite
+python -m gmail_to_sqlite sync --data-dir ./data
+python -m gmail_to_sqlite chat --data-dir ./data
 ```
 
 ### Command Line Arguments

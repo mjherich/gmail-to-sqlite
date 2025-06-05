@@ -10,6 +10,8 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 - **Robust Error Handling**: Automatic retries with exponential backoff
 - **Graceful Shutdown**: Handles interruption signals cleanly
 - **Type Safety**: Comprehensive type hints throughout the codebase
+- **AI-Powered Chat**: Interactive chat interface and natural language queries about your emails using OpenAI
+- **Interactive Chat**: Multi-turn conversational interface with CrewAI agents for email analysis
 
 ## Installation
 
@@ -18,6 +20,7 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 - Python 3.8 or higher
 - Google Cloud Project with Gmail API enabled
 - OAuth 2.0 credentials file (`credentials.json`)
+- OpenAI API key (for AI query features)
 
 ### Setup
 
@@ -36,27 +39,34 @@ A robust Python application that syncs Gmail messages to a local SQLite database
    ```
 
 3. **Set up Gmail API credentials:**
+
    - Go to the [Google Cloud Console](https://console.cloud.google.com/)
    - Create a new project or select an existing one
    - Enable the Gmail API
    - Create OAuth 2.0 credentials (Desktop application)
    - Download the credentials file and save it as `credentials.json` in the project root
 
+4. **Set up OpenAI API key (for AI features):**
+   - Get an API key from [OpenAI](https://platform.openai.com/api-keys)
+   - Copy `.env.example` to `.env`: `cp .env.example .env`
+   - Edit `.env` and add your OpenAI API key
+
 ## Usage
 
 ### Configuration
 
-You can configure the data directory in two ways:
+You can configure the application in two ways:
 
-1. **Environment Variable**: Create a `.env` file (copy from `.env.example`)
-2. **Command Line**: Use the `--data-dir` argument
+1. **Environment Variables**: Create a `.env` file (copy from `.env.example`)
+2. **Command Line Arguments**: Use command-line flags like `--data-dir`
 
 ```bash
 # Copy the example configuration
 cp .env.example .env
 
-# Edit .env to set your data directory
+# Edit .env to set your data directory and OpenAI API key
 # GMAIL_DATA_DIR=./data
+# OPENAI_API_KEY=your-openai-api-key-here
 ```
 
 ### Basic Commands
@@ -79,6 +89,15 @@ python -m gmail_to_sqlite sync-deleted-messages --data-dir ./data
 
 # Use custom number of worker threads
 python -m gmail_to_sqlite sync --data-dir ./data --workers 8
+
+# Ask natural language questions about your emails (single question mode)
+python -m gmail_to_sqlite chat --data-dir ./data --question "Who sent me the most emails?"
+
+# Ask with custom result limit (single question mode)
+python -m gmail_to_sqlite chat --data-dir ./data --question "Show me unread emails from last week" --max-rows 10
+
+# Start interactive chat session
+python -m gmail_to_sqlite chat --data-dir ./data
 ```
 
 ### Alternative: Install and Use CLI Command
@@ -90,14 +109,18 @@ pip install -e .
 # Now you can use the CLI command directly
 gmail-to-sqlite sync
 gmail-to-sqlite sync --data-dir ./data --full-sync
+gmail-to-sqlite chat --data-dir ./data --question "Show me emails about meetings"
+gmail-to-sqlite chat --data-dir ./data
 ```
 
 ### Command Line Arguments
 
-- `command`: Required. One of `sync`, `sync-message`, or `sync-deleted-messages`
+- `command`: Required. One of `sync`, `sync-message`, `sync-deleted-messages`, or `chat`
 - `--data-dir`: Optional. Directory where the SQLite database will be stored (can also be set via `GMAIL_DATA_DIR` environment variable)
 - `--full-sync`: Optional. Forces a complete sync of all messages
 - `--message-id`: Required for `sync-message`. The ID of a specific message to sync
+- `--question`: Optional for `chat`. Natural language question about your emails (if provided, asks question and exits; if not provided, starts interactive chat)
+- `--max-rows`: Optional. Maximum number of rows to display in query results (default: 20)
 - `--workers`: Optional. Number of worker threads (default: number of CPU cores)
 
 ### Graceful Shutdown
@@ -131,7 +154,64 @@ The application creates a SQLite database with the following schema:
 | is_deleted   | BOOLEAN  | Whether deleted from Gmail       |
 | last_indexed | DATETIME | Last sync timestamp              |
 
-## Example queries
+## AI-Powered Natural Language Queries
+
+The `chat` command with the `--question` parameter allows you to ask single questions about your email database using natural language. Here are some example questions you can ask:
+
+```bash
+# Find your top email senders
+gmail-to-sqlite chat --data-dir ./data --question "Who are the top 10 people who sent me emails?"
+
+# Find emails about specific topics
+gmail-to-sqlite chat --data-dir ./data --question "Show me emails about meetings from last month"
+
+# Check unread emails
+gmail-to-sqlite chat --data-dir ./data --question "How many unread emails do I have?"
+
+# Find emails by size
+gmail-to-sqlite chat --data-dir ./data --question "Show me the largest emails I've received"
+
+# Time-based queries
+gmail-to-sqlite chat --data-dir ./data --question "How many emails did I receive each day this week?"
+
+# Find emails from specific domains
+gmail-to-sqlite chat --data-dir ./data --question "Show me all emails from gmail.com addresses"
+```
+
+The AI agent will automatically convert your natural language question into a SQL query and execute it against your email database.
+
+## Interactive Multi-Turn Chat
+
+The `chat` command starts an interactive conversational interface powered by CrewAI agents. This allows for multi-turn conversations where the agent maintains context and can answer follow-up questions.
+
+```bash
+# Start interactive chat session
+gmail-to-sqlite chat --data-dir ./data
+```
+
+Example conversation:
+
+```
+🤖 Agent ready! You can now chat about your Gmail data.
+
+You: Who sends me the most emails?
+🤖 Agent: I'll analyze your top email senders for you...
+
+You: What about in the last month specifically?
+🤖 Agent: Let me filter that to just the last month...
+
+You: Can you show me some of those emails?
+🤖 Agent: Here are some recent emails from your top senders...
+```
+
+Features of the interactive chat:
+
+- **Context Preservation**: The agent remembers previous questions and responses
+- **Natural Conversation**: Ask follow-up questions without repeating context
+- **Smart Analysis**: CrewAI agents provide insights beyond simple SQL queries
+- **Easy Exit**: Type `exit`, `quit`, or press Ctrl+C to end the session
+
+## Manual SQL Queries
 
 ### Get the number of emails per sender
 

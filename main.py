@@ -5,7 +5,7 @@ import signal
 import sys
 from typing import Any, Callable, List, Optional
 
-from gmail_to_sqlite import auth, db, sync
+from gmail_to_sqlite import auth, db, sync, chat
 from gmail_to_sqlite.constants import DEFAULT_WORKERS, LOG_FORMAT
 
 
@@ -95,21 +95,25 @@ Commands:
   sync                     Sync all messages (incremental by default)
   sync-message             Sync a single message by ID
   sync-deleted-messages    Detect and mark deleted messages
+  chat                     Interactive chat with Gmail analysis agent or ask single question
 
 Examples:
   %(prog)s sync --data-dir ./data
   %(prog)s sync --data-dir ./data --full-sync
   %(prog)s sync-message --data-dir ./data --message-id abc123
+  %(prog)s chat --data-dir ./data --question "Who sent me the most emails?"
+  %(prog)s chat --data-dir ./data
         """,
     )
 
     parser.add_argument(
         "command",
-        choices=["sync", "sync-message", "sync-deleted-messages"],
+        choices=["sync", "sync-message", "sync-deleted-messages", "chat"],
         help="The command to run",
     )
     parser.add_argument(
-        "--data-dir", required=True, help="The path where the data should be stored"
+        "--data-dir",
+        help="The path where the data should be stored (can also be set via GMAIL_DATA_DIR environment variable)",
     )
     parser.add_argument(
         "--full-sync",
@@ -119,6 +123,16 @@ Examples:
     parser.add_argument(
         "--message-id",
         help="The ID of the message to sync (required for sync-message command)",
+    )
+    parser.add_argument(
+        "--question",
+        help="Natural language question to ask about your emails (optional for chat command)",
+    )
+    parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=20,
+        help="Maximum number of rows to display in query results (default: 20)",
     )
     parser.add_argument(
         "--workers",
@@ -138,12 +152,22 @@ def main() -> None:
         parser = create_argument_parser()
         args = parser.parse_args()
 
+        # Handle data directory - can come from args or environment variable
+        data_dir = args.data_dir or os.environ.get("GMAIL_DATA_DIR")
+        if not data_dir:
+            parser.error(
+                "--data-dir is required or set GMAIL_DATA_DIR environment variable"
+            )
+
         # Validate command-specific arguments
         if args.command == "sync-message" and not args.message_id:
             parser.error("--message-id is required for sync-message command")
 
-        prepare_data_dir(args.data_dir)
-        credentials = auth.get_credentials(args.data_dir)
+        prepare_data_dir(data_dir)
+
+        # Only get credentials for commands that need them
+        if args.command != "chat":
+            credentials = auth.get_credentials(data_dir)
 
         # Set up shutdown handling
         shutdown_state = [False]
@@ -156,26 +180,49 @@ def main() -> None:
         )
 
         try:
-            db_conn = db.init(args.data_dir)
+            if args.command == "chat":
+                # Use CrewAI agent for both interactive chat and single questions
+                try:
+                    if args.question:
+                        # Single question mode - ask and exit
+                        response = chat.ask_single_question(data_dir, args.question)
+                        print(response)
+                    else:
+                        # Interactive chat mode
+                        chat.start_chat(data_dir)
+                except chat.ChatError as e:
+                    logging.error(f"Chat failed: {e}")
+                    sys.exit(1)
+            else:
+                # For other commands, we need credentials and database connection
+                db_conn = db.init(data_dir)
 
-            if args.command == "sync":
-                sync.all_messages(
-                    credentials,
-                    full_sync=args.full_sync,
-                    num_workers=args.workers,
-                    check_shutdown=check_shutdown,
-                )
-            elif args.command == "sync-message":
-                sync.single_message(
-                    credentials, args.message_id, check_shutdown=check_shutdown
-                )
-            elif args.command == "sync-deleted-messages":
-                sync.sync_deleted_messages(credentials, check_shutdown=check_shutdown)
+                if args.command == "sync":
+                    sync.all_messages(
+                        credentials,
+                        full_sync=args.full_sync,
+                        num_workers=args.workers,
+                        check_shutdown=check_shutdown,
+                    )
+                elif args.command == "sync-message":
+                    sync.single_message(
+                        credentials, args.message_id, check_shutdown=check_shutdown
+                    )
+                elif args.command == "sync-deleted-messages":
+                    sync.sync_deleted_messages(
+                        credentials, check_shutdown=check_shutdown
+                    )
 
-            db_conn.close()
+                db_conn.close()
+
             logging.info("Operation completed successfully")
 
-        except (auth.AuthenticationError, db.DatabaseError, sync.SyncError) as e:
+        except (
+            auth.AuthenticationError,
+            db.DatabaseError,
+            sync.SyncError,
+            chat.ChatError,
+        ) as e:
             logging.error(f"Operation failed: {e}")
             sys.exit(1)
         except Exception as e:

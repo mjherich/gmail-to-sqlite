@@ -1,3 +1,6 @@
+# TODO: commit cursor rules, just testing for now
+.cursor/rules/
+
 # Application specific
 credentials.json
 token.json

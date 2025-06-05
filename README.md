@@ -44,29 +44,58 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 
 ## Usage
 
+### Configuration
+
+You can configure the data directory in two ways:
+
+1. **Environment Variable**: Create a `.env` file (copy from `.env.example`)
+2. **Command Line**: Use the `--data-dir` argument
+
+```bash
+# Copy the example configuration
+cp .env.example .env
+
+# Edit .env to set your data directory
+# GMAIL_DATA_DIR=./data
+```
+
 ### Basic Commands
 
 ```bash
-# Incremental sync (default)
-python main.py sync --data-dir ./data
+# Incremental sync (default) - using environment variable
+python -m gmail_to_sqlite sync
+
+# Incremental sync with command line argument
+python -m gmail_to_sqlite sync --data-dir ./data
 
 # Full sync with deletion detection
-python main.py sync --data-dir ./data --full-sync
+python -m gmail_to_sqlite sync --data-dir ./data --full-sync
 
 # Sync a specific message
-python main.py sync-message --data-dir ./data --message-id MESSAGE_ID
+python -m gmail_to_sqlite sync-message --data-dir ./data --message-id MESSAGE_ID
 
 # Detect and mark deleted messages only
-python main.py sync-deleted-messages --data-dir ./data
+python -m gmail_to_sqlite sync-deleted-messages --data-dir ./data
 
 # Use custom number of worker threads
-python main.py sync --data-dir ./data --workers 8
+python -m gmail_to_sqlite sync --data-dir ./data --workers 8
+```
+
+### Alternative: Install and Use CLI Command
+
+```bash
+# Install the package
+pip install -e .
+
+# Now you can use the CLI command directly
+gmail-to-sqlite sync
+gmail-to-sqlite sync --data-dir ./data --full-sync
 ```
 
 ### Command Line Arguments
 
 - `command`: Required. One of `sync`, `sync-message`, or `sync-deleted-messages`
-- `--data-dir`: Required. Directory where the SQLite database will be stored
+- `--data-dir`: Optional. Directory where the SQLite database will be stored (can also be set via `GMAIL_DATA_DIR` environment variable)
 - `--full-sync`: Optional. Forces a complete sync of all messages
 - `--message-id`: Required for `sync-message`. The ID of a specific message to sync
 - `--workers`: Optional. Number of worker threads (default: number of CPU cores)

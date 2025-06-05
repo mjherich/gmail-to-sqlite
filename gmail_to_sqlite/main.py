@@ -5,6 +5,8 @@ import signal
 import sys
 from typing import Any, Callable, List, Optional
 
+from dotenv import load_dotenv
+
 from . import auth, db, sync
 from .constants import DEFAULT_WORKERS, LOG_FORMAT
 
@@ -109,7 +111,8 @@ Examples:
         help="The command to run",
     )
     parser.add_argument(
-        "--data-dir", required=True, help="The path where the data should be stored"
+        "--data-dir", 
+        help="The path where the data should be stored (can also be set via GMAIL_DATA_DIR environment variable)"
     )
     parser.add_argument(
         "--full-sync",
@@ -134,6 +137,9 @@ def main() -> None:
     """Main application entry point."""
     setup_logging()
 
+    # Load environment variables
+    load_dotenv()
+
     try:
         parser = create_argument_parser()
         args = parser.parse_args()
@@ -142,8 +148,13 @@ def main() -> None:
         if args.command == "sync-message" and not args.message_id:
             parser.error("--message-id is required for sync-message command")
 
-        prepare_data_dir(args.data_dir)
-        credentials = auth.get_credentials(args.data_dir)
+        # Get data directory from args or environment variable
+        data_dir = args.data_dir or os.getenv("GMAIL_DATA_DIR")
+        if not data_dir:
+            parser.error("--data-dir is required or set GMAIL_DATA_DIR environment variable")
+
+        prepare_data_dir(data_dir)
+        credentials = auth.get_credentials(data_dir)
 
         # Set up shutdown handling
         shutdown_state = [False]
@@ -156,7 +167,7 @@ def main() -> None:
         )
 
         try:
-            db_conn = db.init(args.data_dir)
+            db_conn = db.init(data_dir)
 
             if args.command == "sync":
                 sync.all_messages(

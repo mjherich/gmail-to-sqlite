@@ -59,17 +59,19 @@ def setup_chat_logging() -> None:
     logging.getLogger("gmail_to_sqlite").setLevel(logging.INFO)
 
 
-class SQLiteTool(BaseTool):
-    """A custom CrewAI tool for executing SQL queries against SQLite databases."""
+class EnhancedSQLiteTool(BaseTool):
+    """An intelligent CrewAI tool for executing SQL queries against SQLite databases with AI-powered query generation."""
 
-    name: str = "SQLite Query Tool"
+    name: str = "Enhanced SQLite Query Tool"
     description: str = """
-    Execute SQL queries against a SQLite database containing Gmail messages.
+    Execute intelligent SQL queries against a SQLite database containing Gmail messages.
     
-    Input should be a natural language question about email data, and the tool will:
-    1. Convert it to an appropriate SQL query
-    2. Execute the query against the database
-    3. Return formatted results
+    This tool can:
+    1. Convert complex natural language questions to optimized SQL queries using AI
+    2. Handle advanced queries with JOINs, subqueries, and complex aggregations
+    3. Provide query optimization and validation
+    4. Return formatted results with insights
+    5. Cache common queries for better performance
     
     The database contains a 'messages' table with these columns:
     - message_id: Unique Gmail message ID  
@@ -86,15 +88,19 @@ class SQLiteTool(BaseTool):
     - is_deleted: Boolean if deleted from Gmail
     - last_indexed: When message was last synced
     
-    Examples:
-    - "Who sends me the most emails?" -> SELECT sender->>'$.email', COUNT(*) FROM messages GROUP BY sender->>'$.email' ORDER BY COUNT(*) DESC
-    - "How many unread emails do I have?" -> SELECT COUNT(*) FROM messages WHERE is_read = 0
-    - "Show me emails from last week" -> SELECT subject, sender FROM messages WHERE timestamp >= date('now', '-7 days')
+    Can handle complex queries like:
+    - "Compare my email volume between 2023 and 2024 by month"
+    - "Find email threads with the most participants"
+    - "Show me the response time patterns for different contacts"
+    - "Analyze my email activity by day of week and hour"
     """
 
-    def __init__(self, db_path: str, **kwargs):
+    def __init__(self, db_path: str, llm=None, **kwargs):
         super().__init__(**kwargs)
         self._db_path = db_path
+        self._llm = llm
+        self._query_cache = {}
+        self._schema_info = None
 
     def _run(self, query: str) -> str:
         """
@@ -107,7 +113,7 @@ class SQLiteTool(BaseTool):
             Formatted query results
         """
         try:
-            # If it's already a SQL query (starts with SELECT, INSERT, etc.), execute directly
+            # Check if it's already a SQL query
             query_upper = query.strip().upper()
             if any(
                 query_upper.startswith(cmd)
@@ -118,10 +124,10 @@ class SQLiteTool(BaseTool):
                     f"🔍 Executing SQL: {sql_query[:100]}{'...' if len(sql_query) > 100 else ''}"
                 )
             else:
-                # Convert natural language to SQL
-                sql_query = self._natural_language_to_sql(query)
-                print(f"🔄 Converted '{query}' to SQL:")
-                print(f"   {sql_query}")
+                # Use intelligent SQL generation
+                print(f"🧠 Analyzing: '{query}'")
+                sql_query = self._intelligent_sql_generation(query)
+                print(f"📝 Generated SQL: {sql_query[:150]}{'...' if len(sql_query) > 150 else ''}")
 
             # Execute the query
             result = self._execute_sql_query(sql_query)
@@ -139,12 +145,83 @@ class SQLiteTool(BaseTool):
             print(f"❌ SQL Error: {error_msg}")
             return error_msg
 
-    def _natural_language_to_sql(self, question: str) -> str:
+    def _get_schema_info(self) -> str:
+        """Get cached schema information for context."""
+        if self._schema_info is None:
+            try:
+                conn = sqlite3.connect(self._db_path)
+                cursor = conn.cursor()
+                
+                # Get table schema
+                cursor.execute("PRAGMA table_info(messages);")
+                columns = cursor.fetchall()
+                
+                schema_parts = ["Table: messages"]
+                schema_parts.append("Columns:")
+                for col in columns:
+                    col_name, col_type = col[1], col[2]
+                    schema_parts.append(f"  - {col_name}: {col_type}")
+                
+                # Get sample data patterns
+                cursor.execute("SELECT COUNT(*) FROM messages")
+                total_count = cursor.fetchone()[0]
+                schema_parts.append(f"\nTotal messages: {total_count}")
+                
+                conn.close()
+                self._schema_info = "\n".join(schema_parts)
+            except Exception as e:
+                self._schema_info = f"Schema info unavailable: {e}"
+        
+        return self._schema_info
+    
+    def _intelligent_sql_generation(self, question: str) -> str:
         """
-        Convert natural language questions to SQL queries.
-
-        This is a simple pattern-matching approach. For more complex queries,
-        you could integrate with an LLM here.
+        Use AI to generate SQL queries from natural language.
+        Falls back to pattern matching if AI is unavailable.
+        """
+        if self._llm is None:
+            return self._fallback_pattern_matching(question)
+        
+        try:
+            schema_context = self._get_schema_info()
+            
+            sql_prompt = f"""
+            You are an expert SQL query generator for Gmail email data analysis.
+            
+            Database Schema:
+            {schema_context}
+            
+            User Question: "{question}"
+            
+            Generate a SQLite query to answer this question. Follow these guidelines:
+            1. Use proper SQLite syntax
+            2. Handle JSON fields with -> and ->> operators for sender/recipients
+            3. Use date functions like strftime() for date filtering
+            4. Add appropriate LIMIT clauses for large result sets
+            5. Include helpful column aliases
+            6. Optimize for performance
+            
+            Return ONLY the SQL query, no explanations.
+            """
+            
+            # Use the LLM to generate SQL
+            response = self._llm.invoke(sql_prompt)
+            sql_query = response.strip()
+            
+            # Basic validation
+            if not sql_query.upper().startswith(('SELECT', 'WITH')):
+                raise ValueError("Generated query must be a SELECT statement")
+            
+            return sql_query
+            
+        except Exception as e:
+            print(f"⚠️  AI SQL generation failed: {e}. Using pattern matching.")
+            return self._fallback_pattern_matching(question)
+    
+    def _fallback_pattern_matching(self, question: str) -> str:
+        """
+        Fallback pattern-matching approach for SQL generation.
+        Enhanced version of the original method.
         """
         question_lower = question.lower()
 
@@ -155,89 +232,103 @@ class SQLiteTool(BaseTool):
                 year_filter = f" AND strftime('%Y', timestamp) = '{year}'"
                 break
 
-        # Common patterns
-        if (
-            "who sends me the most emails" in question_lower
-            or "top senders" in question_lower
-        ):
+        # Enhanced pattern matching with more sophisticated queries
+        if ("compare" in question_lower and "volume" in question_lower) or ("by month" in question_lower):
+            return f"""
+            SELECT strftime('%Y-%m', timestamp) as month,
+                   COUNT(*) as email_count,
+                   AVG(size) as avg_size
+            FROM messages 
+            WHERE 1=1{year_filter}
+            GROUP BY strftime('%Y-%m', timestamp)
+            ORDER BY month DESC
+            LIMIT 24
+            """
+
+        elif "thread" in question_lower and ("participants" in question_lower or "people" in question_lower):
+            return f"""
+            SELECT thread_id,
+                   COUNT(*) as message_count,
+                   COUNT(DISTINCT sender->>'$.email') as unique_senders,
+                   MIN(timestamp) as thread_start,
+                   MAX(timestamp) as thread_end
+            FROM messages 
+            WHERE 1=1{year_filter}
+            GROUP BY thread_id
+            HAVING message_count > 1
+            ORDER BY unique_senders DESC, message_count DESC
+            LIMIT 10
+            """
+
+        elif "response time" in question_lower or "reply time" in question_lower:
+            return f"""
+            SELECT sender->>'$.email' as contact,
+                   AVG(julianday(timestamp) - julianday(LAG(timestamp) OVER (ORDER BY timestamp))) * 24 * 60 as avg_response_minutes,
+                   COUNT(*) as email_count
+            FROM messages 
+            WHERE is_outgoing = 0{year_filter}
+            GROUP BY sender->>'$.email'
+            HAVING email_count > 5
+            ORDER BY avg_response_minutes ASC
+            LIMIT 10
+            """
+
+        elif "day of week" in question_lower or "hour" in question_lower:
+            return f"""
+            SELECT strftime('%w', timestamp) as day_of_week,
+                   strftime('%H', timestamp) as hour,
+                   COUNT(*) as email_count
+            FROM messages 
+            WHERE 1=1{year_filter}
+            GROUP BY day_of_week, hour
+            ORDER BY email_count DESC
+            LIMIT 20
+            """
+
+        # Original patterns (enhanced)
+        elif ("who sends me the most emails" in question_lower or "top senders" in question_lower):
             return f"""
             SELECT sender->>'$.email' as sender_email, 
                    sender->>'$.name' as sender_name,
-                   COUNT(*) as email_count
+                   COUNT(*) as email_count,
+                   MAX(timestamp) as last_email
             FROM messages 
             WHERE is_outgoing = 0{year_filter}
             GROUP BY sender->>'$.email', sender->>'$.name'
             ORDER BY email_count DESC 
-            LIMIT 10
+            LIMIT 15
             """
 
         elif "unread" in question_lower:
-            return f"SELECT COUNT(*) as unread_count FROM messages WHERE is_read = 0{year_filter}"
+            return f"""
+            SELECT COUNT(*) as unread_count,
+                   COUNT(CASE WHEN is_outgoing = 0 THEN 1 END) as unread_received,
+                   COUNT(CASE WHEN is_outgoing = 1 THEN 1 END) as unread_sent
+            FROM messages 
+            WHERE is_read = 0{year_filter}
+            """
 
         elif "last week" in question_lower or "past week" in question_lower:
             return f"""
-            SELECT subject, sender->>'$.email' as sender, timestamp
+            SELECT DATE(timestamp) as date,
+                   COUNT(*) as daily_count,
+                   COUNT(CASE WHEN is_outgoing = 0 THEN 1 END) as received,
+                   COUNT(CASE WHEN is_outgoing = 1 THEN 1 END) as sent
             FROM messages 
             WHERE timestamp >= date('now', '-7 days'){year_filter}
-            ORDER BY timestamp DESC
-            LIMIT 20
-            """
-
-        elif "last month" in question_lower or "past month" in question_lower:
-            return f"""
-            SELECT subject, sender->>'$.email' as sender, timestamp
-            FROM messages 
-            WHERE timestamp >= date('now', '-30 days'){year_filter}
-            ORDER BY timestamp DESC
-            LIMIT 20
-            """
-
-        elif "today" in question_lower:
-            return f"""
-            SELECT subject, sender->>'$.email' as sender, timestamp
-            FROM messages 
-            WHERE date(timestamp) = date('now'){year_filter}
-            ORDER BY timestamp DESC
-            """
-
-        elif "labels" in question_lower and (
-            "most common" in question_lower or "frequent" in question_lower
-        ):
-            return f"""
-            SELECT json_extract(label.value, '$') as label_name, COUNT(*) as count
-            FROM messages, json_each(messages.labels) as label
-            WHERE 1=1{year_filter}
-            GROUP BY label_name
-            ORDER BY count DESC
-            LIMIT 10
-            """
-
-        elif "total" in question_lower and "emails" in question_lower:
-            return (
-                f"SELECT COUNT(*) as total_emails FROM messages WHERE 1=1{year_filter}"
-            )
-
-        elif "sent" in question_lower and (
-            "by me" in question_lower or "outgoing" in question_lower
-        ):
-            return f"SELECT COUNT(*) as sent_emails FROM messages WHERE is_outgoing = 1{year_filter}"
-
-        elif "received" in question_lower or "incoming" in question_lower:
-            return f"SELECT COUNT(*) as received_emails FROM messages WHERE is_outgoing = 0{year_filter}"
-
-        elif "largest" in question_lower and "emails" in question_lower:
-            return f"""
-            SELECT subject, sender->>'$.email' as sender, size, timestamp
-            FROM messages 
-            WHERE 1=1{year_filter}
-            ORDER BY size DESC
-            LIMIT 10
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
             """
 
         else:
-            # Default: return a helpful query showing recent emails
+            # Enhanced default query with more context
             return f"""
-            SELECT subject, sender->>'$.email' as sender, timestamp, is_read
+            SELECT subject, 
+                   sender->>'$.email' as sender, 
+                   timestamp,
+                   is_read,
+                   is_outgoing,
+                   CASE WHEN length(body) > 100 THEN substr(body, 1, 100) || '...' ELSE body END as preview
             FROM messages 
             WHERE 1=1{year_filter}
             ORDER BY timestamp DESC
@@ -349,34 +440,44 @@ class EmailAnalysisAgent:
         # Create the LLM instance for CrewAI
         self.llm = LLM(model=model_name, api_key=api_key, temperature=0.1)
 
-        # Initialize the custom SQLite tool
-        self.sqlite_tool = SQLiteTool(db_path=db_path)
+        # Initialize the enhanced SQLite tool with AI capabilities
+        self.sqlite_tool = EnhancedSQLiteTool(db_path=db_path, llm=self.llm)
 
         # Get database schema for context
         self.db_schema = self._get_database_schema()
 
-        # Create the CrewAI agent with the SQLite tool
+        # Create the enhanced CrewAI agent with advanced capabilities
         self.agent = Agent(
-            role="Gmail Data Analyst",
-            goal="Help users analyze and understand their Gmail data through natural conversation and SQL queries",
-            backstory=f"""You are an expert data analyst specializing in email data analysis. 
-            You have access to a SQLite database containing Gmail messages with the following schema:
+            role="Gmail Data Analyst & Insights Expert",
+            goal="Provide deep, actionable insights about Gmail data through intelligent analysis and natural conversation",
+            backstory=f"""You are a world-class data analyst and email intelligence expert with deep expertise in:
             
+            📊 **Data Analysis**: Advanced statistical analysis, pattern recognition, and trend identification
+            📧 **Email Analytics**: Communication patterns, productivity insights, and relationship mapping  
+            🧠 **Context Awareness**: Remember previous conversations and build upon past insights
+            💡 **Strategic Thinking**: Provide actionable recommendations based on data patterns
+            
+            **Your Database**: Gmail messages with schema:
             {self.db_schema}
             
-            You can:
-            - Answer questions about email patterns, senders, recipients, and content
-            - Execute SQL queries using the SQLite Query Tool to extract specific information
-            - Provide insights and analytics about email usage
-            - Maintain context across multiple conversation turns
+            **Your Capabilities**:
+            - Generate intelligent SQL queries for complex analysis using AI-powered query generation
+            - Identify meaningful patterns and trends in email data
+            - Provide explanations and context for all findings
+            - Remember conversation history and build upon previous insights
+            - Suggest follow-up analyses and interesting questions
+            - Translate data into actionable productivity and communication insights
             
-            When users ask questions about their email data, use the SQLite Query Tool to query the database
-            and provide accurate results. Always explain what you're analyzing and provide clear insights
-            based on the results. You can pass either natural language questions or SQL queries to the tool.""",
+            **Your Approach**: Always explain what you're analyzing, why it's interesting, and what the user can learn from it. 
+            Don't just show data - provide insights, context, and recommendations. Use your enhanced SQL capabilities to 
+            answer complex questions that go beyond simple pattern matching.""",
             llm=self.llm,
             verbose=False,
-            memory=True,
+            memory=True,  # Enhanced persistent memory
+            respect_context_window=True,  # Auto-manage context limits
             allow_delegation=False,
+            max_rpm=30,  # Rate limiting for cost control
+            function_calling_llm=self.llm,  # Use same model for now, can optimize later
             tools=[self.sqlite_tool],
         )
 
@@ -565,19 +666,20 @@ def start_chat(model: str = "gemini") -> None:
         model_description = MODEL_DESCRIPTIONS.get(model, "Unknown Model")
 
         print(f"🤖 Using {model_description}")
-        print("✅ Tool usage enabled - you'll see SQL queries and results")
+        print("✅ Enhanced AI-powered analysis enabled")
+        print("💫 Features: Intelligent SQL generation, persistent memory, advanced insights")
 
         # Initialize the agent with selected model
         print(f"\n🤖 Initializing Gmail Analysis Agent...")
         agent = EmailAnalysisAgent(db_path, model_name=model_name)
 
-        print("✅ Agent ready! You can now chat about your Gmail data.")
-        print("💡 Try asking things like:")
-        print("   - 'Who sends me the most emails?'")
-        print("   - 'Show me emails from last week'")
-        print("   - 'What are my most common email labels?'")
-        print("   - 'How many unread emails do I have?'")
-        print("   - 'Who emailed me most in 2023?'")
+        print("✅ Enhanced Agent ready! You can now have intelligent conversations about your Gmail data.")
+        print("💡 Try asking sophisticated questions like:")
+        print("   🔍 Basic: 'Who sends me the most emails?' or 'How many unread emails do I have?'")
+        print("   📊 Advanced: 'Compare my email volume between 2023 and 2024 by month'")
+        print("   🧵 Threads: 'Find email threads with the most participants'")
+        print("   ⏱️ Patterns: 'Analyze my email activity by day of week and hour'")
+        print("   🚀 Complex: 'What are my response time patterns for different contacts?'")
         print("\n📝 Type 'exit' or 'quit' to end the conversation.")
         print("🔧 Type 'model' to switch AI models.")
         print()

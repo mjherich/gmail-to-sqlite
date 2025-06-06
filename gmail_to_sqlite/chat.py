@@ -25,14 +25,14 @@ logger = logging.getLogger(__name__)
 MODEL_MAP = {
     "gemini": "gemini/gemini-2.0-flash-exp",
     "openai": "openai/gpt-4o",
-    "claude": "anthropic/claude-4-sonnet-2024-05-22",
+    "claude": "anthropic/claude-sonnet-4",
 }
 
 # Model descriptions for display
 MODEL_DESCRIPTIONS = {
     "gemini": "Gemini 2.0 Flash (Fast & Cheap)",
     "openai": "OpenAI GPT-4o (Balanced)",
-    "claude": "Claude 4 Sonnet (Most Capable)",
+    "claude": "Claude Sonnet 4 (Most Capable)",
 }
 
 
@@ -616,7 +616,7 @@ def show_model_options() -> str:
     models = {
         "1": ("gemini", "Gemini 2.0 Flash (Default - Fast & Cheap)"),
         "2": ("openai", "OpenAI GPT-4o (Balanced)"),
-        "3": ("claude", "Claude 3.5 Sonnet (Most Capable)"),
+        "3": ("claude", "Claude Sonnet 4 (Most Capable)"),
     }
 
     print("\n🤖 Available AI Models:")

@@ -16,6 +16,7 @@ from crewai.tools import BaseTool
 
 from .constants import DATABASE_FILE_NAME
 from .config import settings
+from .tools import EmailPatternAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -443,6 +444,9 @@ class EmailAnalysisAgent:
 
         # Initialize the enhanced SQLite tool with AI capabilities
         self.sqlite_tool = EnhancedSQLiteTool(db_path=db_path, llm=self.llm)
+        
+        # Initialize the EmailPatternAnalyzer tool for advanced analytics
+        self.pattern_analyzer = EmailPatternAnalyzer(db_path=db_path)
 
         # Get database schema for context
         self.db_schema = self._get_database_schema()
@@ -463,7 +467,9 @@ class EmailAnalysisAgent:
             
             **Your Capabilities**:
             - Generate intelligent SQL queries for complex analysis using AI-powered query generation
+            - Perform advanced pattern analysis using the EmailPatternAnalyzer tool
             - Identify meaningful patterns and trends in email data
+            - Analyze volume trends, response times, activity patterns, and communication networks
             - Provide explanations and context for all findings
             - Remember conversation history and build upon previous insights
             - Suggest follow-up analyses and interesting questions
@@ -479,7 +485,7 @@ class EmailAnalysisAgent:
             allow_delegation=False,
             max_rpm=30,  # Rate limiting for cost control
             function_calling_llm=self.llm,  # Use same model for now, can optimize later
-            tools=[self.sqlite_tool],
+            tools=[self.sqlite_tool, self.pattern_analyzer],
         )
 
     def _get_database_schema(self) -> str:

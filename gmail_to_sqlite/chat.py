@@ -205,7 +205,8 @@ class EnhancedSQLiteTool(BaseTool):
             """
             
             # Use the LLM to generate SQL
-            response = self._llm.invoke(sql_prompt)
+            messages = [{"role": "user", "content": sql_prompt}]
+            response = self._llm.call(messages)
             sql_query = response.strip()
             
             # Basic validation
@@ -587,8 +588,11 @@ class EmailAnalysisAgent:
             return response
 
         except Exception as e:
+            import traceback
             error_msg = f"Error processing your message: {e}"
-            logger.error(error_msg)
+            detailed_error = f"Error details: {str(e)}\nTraceback: {traceback.format_exc()}"
+            logger.error(detailed_error)
+            print(f"🔍 DEBUG: {detailed_error}")
             return error_msg
 
 

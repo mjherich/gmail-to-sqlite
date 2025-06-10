@@ -168,9 +168,9 @@ def last_indexed() -> Optional[datetime]:
         Optional[datetime]: The timestamp of the last indexed message, or None if no messages exist.
     """
 
-    msg = Message.select().order_by(Message.timestamp.desc()).first()
+    msg = Message.select().order_by(Message.last_indexed.desc()).first()
     if msg:
-        timestamp: Optional[datetime] = msg.timestamp
+        timestamp: Optional[datetime] = msg.last_indexed
         return timestamp
     else:
         return None
@@ -184,9 +184,9 @@ def first_indexed() -> Optional[datetime]:
         Optional[datetime]: The timestamp of the first indexed message, or None if no messages exist.
     """
 
-    msg = Message.select().order_by(Message.timestamp.asc()).first()
+    msg = Message.select().order_by(Message.last_indexed.asc()).first()
     if msg:
-        timestamp: Optional[datetime] = msg.timestamp
+        timestamp: Optional[datetime] = msg.last_indexed
         return timestamp
     else:
         return None

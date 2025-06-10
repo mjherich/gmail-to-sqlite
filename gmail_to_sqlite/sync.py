@@ -187,7 +187,7 @@ def get_message_ids_from_gmail(
                 list_params["pageToken"] = page_token
 
             if query:
-                list_params["q"] = " | ".join(query)
+                list_params["q"] = " ".join(query)
 
             results = service.users().messages().list(**list_params).execute()
             messages_page = results.get("messages", [])
@@ -307,10 +307,8 @@ def all_messages(
         if not full_sync:
             last = db.last_indexed()
             if last:
+                # Only get messages after the last indexed timestamp
                 query.append(f"after:{int(last.timestamp())}")
-            first = db.first_indexed()
-            if first:
-                query.append(f"before:{int(first.timestamp())}")
 
         service = _create_service(credentials)
         labels = get_labels(service)

@@ -1,5 +1,5 @@
 import os
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -15,10 +15,67 @@ class AuthenticationError(Exception):
     pass
 
 
-def get_credentials() -> Any:
+def _get_account_data_dir(account_name: Optional[str] = None) -> str:
+    """
+    Get the data directory for a specific account.
+    
+    Args:
+        account_name: Name of the account. If None, uses the first account.
+        
+    Returns:
+        str: The data directory path for the account.
+        
+    Raises:
+        AuthenticationError: If no accounts are configured or account not found.
+    """
+    accounts = settings.get("ACCOUNTS", [])
+    
+    # Fallback to legacy DATA_DIR if no accounts configured
+    if not accounts:
+        data_dir = settings.get("DATA_DIR")
+        if not data_dir:
+            raise AuthenticationError("Neither ACCOUNTS nor DATA_DIR configured in settings")
+        return data_dir
+    
+    # Find the specified account or use the first one
+    if account_name is None:
+        account = accounts[0]
+    else:
+        account = next((acc for acc in accounts if acc.get("name") == account_name), None)
+        if account is None:
+            available_accounts = [acc.get("name") for acc in accounts]
+            raise AuthenticationError(
+                f"Account '{account_name}' not found. Available accounts: {available_accounts}"
+            )
+    
+    data_dir = account.get("data_dir")
+    if not data_dir:
+        raise AuthenticationError(f"Account '{account.get('name')}' missing data_dir configuration")
+    
+    return data_dir
+
+
+def get_available_accounts() -> List[str]:
+    """
+    Get list of available account names.
+    
+    Returns:
+        List[str]: List of account names configured in settings.
+    """
+    accounts = settings.get("ACCOUNTS", [])
+    if not accounts:
+        return ["default"]  # Fallback for legacy DATA_DIR setup
+    
+    return [acc.get("name", "unnamed") for acc in accounts]
+
+
+def get_credentials(account_name: Optional[str] = None) -> Any:
     """
     Retrieves the authentication credentials by either loading them from the token file 
-    or by running the authentication flow. Uses data directory from settings.
+    or by running the authentication flow. Uses account-specific data directory.
+
+    Args:
+        account_name: Name of the account to get credentials for. If None, uses the first account.
 
     Returns:
         Any: The authentication credentials (compatible with Google API clients).
@@ -38,10 +95,8 @@ def get_credentials() -> Any:
             f"and saved them as '{OAUTH2_CREDENTIALS_FILE}' in the project root directory."
         )
 
-    data_dir = settings.get("DATA_DIR")
-    if not data_dir:
-        raise AuthenticationError("DATA_DIR not configured in settings")
-    
+    # Get account-specific data directory
+    data_dir = _get_account_data_dir(account_name)
     token_file_path = os.path.join(data_dir, TOKEN_FILE_NAME)
     creds: Optional[Any] = None
 

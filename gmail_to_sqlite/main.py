@@ -8,7 +8,6 @@ from typing import Any, Callable, List, Optional
 
 from . import auth, db, sync, chat
 from .constants import DEFAULT_WORKERS, LOG_FORMAT
-from .config import settings
 
 
 class ApplicationError(Exception):
@@ -100,12 +99,13 @@ Commands:
   chat                     Interactive chat with Gmail analysis agent or ask single question
 
 Configuration:
-  Data directory is configured in .secrets.toml file.
+  Accounts and data directories are configured in .secrets.toml file.
 
 Examples:
   %(prog)s sync
-  %(prog)s sync --full-sync
-  %(prog)s sync-message --message-id abc123
+  %(prog)s sync --account work
+  %(prog)s sync --full-sync --account personal
+  %(prog)s sync-message --message-id abc123 --account work
   %(prog)s chat --question "Who sent me the most emails?"
   %(prog)s chat --model openai
   %(prog)s chat -m claude
@@ -152,6 +152,12 @@ Examples:
         default="gemini",
         help="AI model to use for chat (default: gemini)",
     )
+    
+    parser.add_argument(
+        "--account",
+        "-a",
+        help="Account name to use for sync operations (if not specified, uses first account)",
+    )
 
     return parser
 
@@ -168,16 +174,28 @@ def main() -> None:
         if args.command == "sync-message" and not args.message_id:
             parser.error("--message-id is required for sync-message command")
 
-        # Get data directory from Dynaconf settings only
-        data_dir = settings.get("DATA_DIR")
-        if not data_dir:
-            parser.error("DATA_DIR must be configured in .secrets.toml file")
+        # Get account-specific data directory and confirm account selection
+        try:
+            data_dir = auth._get_account_data_dir(args.account)
+            
+            # Show which account will be used if none was explicitly specified
+            if args.account is None and args.command != "chat":
+                accounts = auth.get_available_accounts()
+                if len(accounts) > 1:
+                    account_name = accounts[0]
+                    print(f"Using account: {account_name}")
+                    print(f"Available accounts: {', '.join(accounts)}")
+                    print("Press Enter to continue or Ctrl+C to cancel...")
+                    input()
+                
+        except auth.AuthenticationError as e:
+            parser.error(str(e))
 
         prepare_data_dir(data_dir)
 
         # Only get credentials for commands that need them
         if args.command != "chat":
-            credentials = auth.get_credentials()
+            credentials = auth.get_credentials(args.account)
 
         # Set up shutdown handling
         shutdown_state = [False]
@@ -201,7 +219,7 @@ def main() -> None:
                     chat.start_chat(model=args.model)
             elif args.command == "sync":
                 # Initialize database first
-                db.init()
+                db.init(data_dir)
 
                 # Build sync statistics
                 sync_count = sync.all_messages(
@@ -217,7 +235,7 @@ def main() -> None:
 
             elif args.command == "sync-message":
                 # Initialize database first
-                db.init()
+                db.init(data_dir)
 
                 try:
                     sync.single_message(credentials, args.message_id, check_shutdown)
@@ -228,7 +246,7 @@ def main() -> None:
 
             elif args.command == "sync-deleted-messages":
                 # Initialize database first
-                db.init()
+                db.init(data_dir)
 
                 try:
                     deleted_count = sync.sync_deleted_messages(

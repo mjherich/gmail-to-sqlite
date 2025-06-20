@@ -87,11 +87,12 @@ class Message(Model):
         db_table = "messages"
 
 
-def init(enable_logging: bool = False) -> SqliteDatabase:
+def init(data_dir: Optional[str] = None, enable_logging: bool = False) -> SqliteDatabase:
     """
-    Initialize the database using data directory from settings.
+    Initialize the database using specified or configured data directory.
 
     Args:
+        data_dir (str, optional): Data directory path. If None, uses DATA_DIR from settings.
         enable_logging (bool, optional): Whether to enable logging. Defaults to False.
 
     Returns:
@@ -101,9 +102,10 @@ def init(enable_logging: bool = False) -> SqliteDatabase:
         DatabaseError: If database initialization fails.
     """
     try:
-        data_dir = settings.get("DATA_DIR")
-        if not data_dir:
-            raise DatabaseError("DATA_DIR not configured in settings")
+        if data_dir is None:
+            data_dir = settings.get("DATA_DIR")
+            if not data_dir:
+                raise DatabaseError("DATA_DIR not configured in settings")
         
         db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
         db = SqliteDatabase(db_path)

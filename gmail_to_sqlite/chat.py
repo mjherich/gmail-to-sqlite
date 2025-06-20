@@ -24,14 +24,14 @@ logger = logging.getLogger(__name__)
 
 # Model mapping from simple names to full model identifiers
 MODEL_MAP = {
-    "gemini": "gemini/gemini-2.0-flash-exp",
+    "gemini": "gemini/gemini-2.5-pro",
     "openai": "openai/gpt-4o",
     "claude": "anthropic/claude-sonnet-4",
 }
 
 # Model descriptions for display
 MODEL_DESCRIPTIONS = {
-    "gemini": "Gemini 2.0 Flash (Fast & Cheap)",
+    "gemini": "Gemini 2.5 Pro (Latest & Advanced)",
     "openai": "OpenAI GPT-4o (Balanced)",
     "claude": "Claude Sonnet 4 (Most Capable)",
 }
@@ -395,7 +395,7 @@ class EmailAnalysisAgent:
     def __init__(
         self,
         db_path: str,
-        model_name: str = "gemini/gemini-2.0-flash-exp",
+        model_name: str = "gemini/gemini-2.5-pro",
     ):
         """
         Initialize the email analysis agent.
@@ -439,8 +439,14 @@ class EmailAnalysisAgent:
         else:
             raise ChatError(f"Unsupported model: {model_name}")
 
-        # Create the LLM instance for CrewAI
-        self.llm = LLM(model=model_name, api_key=api_key, temperature=0.1)
+        # Create the LLM instance for CrewAI with rate limiting
+        self.llm = LLM(
+            model=model_name, 
+            api_key=api_key, 
+            temperature=0.1,
+            max_retries=3,
+            timeout=30
+        )
 
         # Initialize the enhanced SQLite tool with AI capabilities
         self.sqlite_tool = EnhancedSQLiteTool(db_path=db_path, llm=self.llm)
@@ -582,8 +588,22 @@ class EmailAnalysisAgent:
                 verbose=False,
             )
 
-            # Execute the task
-            result = crew.kickoff()
+            # Execute the task with retry logic
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    if attempt > 0:
+                        import time
+                        time.sleep(2)  # Brief pause between retries
+                    
+                    result = crew.kickoff()
+                    break
+                except Exception as crew_error:
+                    error_type = type(crew_error).__name__
+                    if "RateLimitError" in error_type and attempt < max_retries:
+                        continue
+                    else:
+                        raise crew_error
 
             # Extract the response
             response = str(result.raw) if hasattr(result, "raw") else str(result)
@@ -595,11 +615,35 @@ class EmailAnalysisAgent:
 
         except Exception as e:
             import traceback
-            error_msg = f"Error processing your message: {e}"
-            detailed_error = f"Error details: {str(e)}\nTraceback: {traceback.format_exc()}"
-            logger.error(detailed_error)
-            print(f"🔍 DEBUG: {detailed_error}")
-            return error_msg
+            
+            # Handle specific error types
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            if "RateLimitError" in error_type:
+                user_friendly_msg = (
+                    "⏳ Rate limit reached. Please wait a moment and try again.\n"
+                    "This can happen when making too many requests too quickly."
+                )
+                return user_friendly_msg
+            elif "AuthenticationError" in error_type:
+                user_friendly_msg = (
+                    "🔐 Authentication failed. Please check your API keys in .secrets.toml"
+                )
+                return user_friendly_msg
+            elif "NotFoundError" in error_type:
+                user_friendly_msg = (
+                    "🔍 Model not found or not available. Try switching to a different model.\n"
+                    "Use 'model' command or --model flag with: gemini, openai, or claude"
+                )
+                return user_friendly_msg
+            else:
+                # Generic error handling
+                error_msg = f"Error processing your message: {e}"
+                detailed_error = f"Error details: {str(e)}\nTraceback: {traceback.format_exc()}"
+                logger.error(detailed_error)
+                
+                return error_msg
 
 
 def get_model_name(model_key: str) -> str:
@@ -624,7 +668,7 @@ def show_model_options() -> str:
         str: The selected model name.
     """
     models = {
-        "1": ("gemini", "Gemini 2.0 Flash (Default - Fast & Cheap)"),
+        "1": ("gemini", "Gemini 2.5 Pro (Default - Latest & Advanced)"),
         "2": ("openai", "OpenAI GPT-4o (Balanced)"),
         "3": ("claude", "Claude Sonnet 4 (Most Capable)"),
     }

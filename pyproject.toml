@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "crewai[tools]>=0.1.7",
     "dynaconf>=3.2.11",
+    "crewai-tools>=0.47.1",
 ]
 
 [project.optional-dependencies]

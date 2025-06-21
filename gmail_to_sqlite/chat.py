@@ -15,6 +15,8 @@ import uuid
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import BaseTool
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.runnables.base import Runnable
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_community.chat_message_histories import SQLChatMessageHistory
 
 from .constants import DATABASE_FILE_NAME
@@ -401,8 +403,120 @@ class EnhancedSQLiteTool(BaseTool):
             return f"SQL Error: {e}"
 
 
+class CrewAIRunnable(Runnable):
+    """
+    LangChain Runnable wrapper for CrewAI agents.
+
+    This allows CrewAI agents to be used with LangChain's RunnableWithMessageHistory
+    and other LangChain patterns for enhanced message handling and error recovery.
+    """
+
+    def __init__(self, crew_agent: Agent, db_path: str, llm: Any):
+        """
+        Initialize the runnable wrapper.
+
+        Args:
+            crew_agent: The CrewAI agent to wrap
+            db_path: Path to the database for context
+            llm: The LLM instance for the agent
+        """
+        self.crew_agent = crew_agent
+        self.db_path = db_path
+        self.llm = llm
+        self.sqlite_tool = None
+        self.pattern_analyzer = None
+
+    def set_tools(self, sqlite_tool: Any, pattern_analyzer: Any) -> None:
+        """Set the tools for the agent."""
+        self.sqlite_tool = sqlite_tool
+        self.pattern_analyzer = pattern_analyzer
+
+    def invoke(
+        self, input_data: Dict[str, Any], config: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Invoke the CrewAI agent with LangChain-compatible interface.
+
+        Args:
+            input_data: Input containing 'input' key with user message
+            config: Optional configuration (not used)
+
+        Returns:
+            str: The agent's response
+        """
+        try:
+            user_message = input_data.get("input", "")
+            if not user_message:
+                return "No input provided."
+
+            # Create a task for the CrewAI agent
+            task_description = f"""
+            Current user message: {user_message}
+            
+            Instructions:
+            1. Respond naturally to the user's question or request
+            2. If they're asking for data analysis, use the SQLite Query Tool to query the database
+            3. When using the SQLite Query Tool, you can pass either natural language questions or SQL queries
+            4. Provide clear insights based on the query results
+            5. If they're asking about email patterns, provide helpful analysis
+            6. Be helpful and informative
+            
+            Remember: You have access to a SQLite database containing Gmail messages. Use the SQLite Query Tool
+            to answer questions that require querying the database.
+            """
+
+            task = Task(
+                description=task_description,
+                expected_output="A helpful, conversational response that addresses the user's question about their Gmail data, including any query results if data analysis was requested.",
+                agent=self.crew_agent,
+            )
+
+            # Create a crew with just this agent and task
+            crew = Crew(
+                agents=[self.crew_agent],
+                tasks=[task],
+                process=Process.sequential,
+                verbose=False,
+            )
+
+            # Execute the task with retry logic
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    if attempt > 0:
+                        import time
+
+                        time.sleep(2)  # Brief pause between retries
+
+                    result = crew.kickoff()
+                    break
+                except Exception as crew_error:
+                    error_type = type(crew_error).__name__
+                    if "RateLimitError" in error_type and attempt < max_retries:
+                        continue
+                    else:
+                        raise crew_error
+
+            # Extract the response
+            response = str(result.raw) if hasattr(result, "raw") else str(result)
+            return response
+
+        except Exception as e:
+            # Handle specific error types with user-friendly messages
+            error_type = type(e).__name__
+
+            if "RateLimitError" in error_type:
+                return "⏳ Rate limit reached. Please wait a moment and try again."
+            elif "AuthenticationError" in error_type:
+                return "🔐 Authentication failed. Please check your API keys in .secrets.toml"
+            elif "NotFoundError" in error_type:
+                return "🔍 Model not found. Try switching to a different model."
+            else:
+                return f"Error processing your message: {e}"
+
+
 class EmailAnalysisAgent:
-    """CrewAI agent specialized in email data analysis."""
+    """CrewAI agent specialized in email data analysis with LangChain integration."""
 
     def __init__(
         self,
@@ -511,6 +625,18 @@ class EmailAnalysisAgent:
             tools=[self.sqlite_tool, self.pattern_analyzer],
         )
 
+        # Create LangChain-compatible runnable wrapper
+        self.agent_runnable = CrewAIRunnable(self.agent, db_path, self.llm)
+        self.agent_runnable.set_tools(self.sqlite_tool, self.pattern_analyzer)
+
+        # Wrap with RunnableWithMessageHistory for enhanced message handling
+        self.agent_with_history = RunnableWithMessageHistory(
+            self.agent_runnable,
+            lambda session_id: self._get_session_history(session_id),
+            input_messages_key="input",
+            history_messages_key="chat_history",
+        )
+
     def _get_session_history(self, session_id: str) -> SQLChatMessageHistory:
         """
         Get or create a SQLChatMessageHistory for the given session.
@@ -591,7 +717,7 @@ class EmailAnalysisAgent:
 
     def chat(self, user_message: str) -> str:
         """
-        Process a user message and return the agent's response.
+        Process a user message and return the agent's response using RunnableWithMessageHistory.
 
         Args:
             user_message (str): The user's message.
@@ -603,69 +729,11 @@ class EmailAnalysisAgent:
             # Show progress indicator
             print(f"🤔 Processing your question...")
 
-            # Add user message to persistent conversation history
-            self.chat_history.add_user_message(user_message)
-
-            # Create context with conversation history
-            context = self._get_conversation_context()
-
-            # Create a task for the agent
-            task_description = f"""
-            Conversation context:
-            {context}
-            
-            Current user message: {user_message}
-            
-            Instructions:
-            1. Respond naturally to the user's question or request
-            2. If they're asking for data analysis, use the SQLite Query Tool to query the database
-            3. When using the SQLite Query Tool, you can pass either natural language questions or SQL queries
-            4. Provide clear insights based on the query results
-            5. If they're asking about email patterns, provide helpful analysis
-            6. Maintain conversational flow and reference previous context when relevant
-            7. Be helpful and informative
-            
-            Remember: You have access to a SQLite database containing Gmail messages. Use the SQLite Query Tool
-            to answer questions that require querying the database.
-            """
-
-            task = Task(
-                description=task_description,
-                expected_output="A helpful, conversational response that addresses the user's question about their Gmail data, including any query results if data analysis was requested.",
-                agent=self.agent,
+            # Use RunnableWithMessageHistory for enhanced message handling
+            response = self.agent_with_history.invoke(
+                {"input": user_message},
+                config={"configurable": {"session_id": self.session_id}},
             )
-
-            # Create a crew with just this agent and task
-            crew = Crew(
-                agents=[self.agent],
-                tasks=[task],
-                process=Process.sequential,
-                verbose=False,
-            )
-
-            # Execute the task with retry logic
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    if attempt > 0:
-                        import time
-
-                        time.sleep(2)  # Brief pause between retries
-
-                    result = crew.kickoff()
-                    break
-                except Exception as crew_error:
-                    error_type = type(crew_error).__name__
-                    if "RateLimitError" in error_type and attempt < max_retries:
-                        continue
-                    else:
-                        raise crew_error
-
-            # Extract the response
-            response = str(result.raw) if hasattr(result, "raw") else str(result)
-
-            # Add agent response to persistent conversation history
-            self.chat_history.add_ai_message(response)
 
             return response
 
@@ -674,7 +742,6 @@ class EmailAnalysisAgent:
 
             # Handle specific error types
             error_type = type(e).__name__
-            error_message = str(e)
 
             if "RateLimitError" in error_type:
                 user_friendly_msg = (

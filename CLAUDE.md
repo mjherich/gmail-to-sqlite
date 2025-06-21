@@ -111,3 +111,6 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **Purpose**: Store research findings, architecture diagrams, implementation plans, experiments, and any transient development artifacts
 - **Git Handling**: Directory contents are gitignored to keep repository clean and focused on production code
 - **Organization**: Files are self-organizing by date prefix for easy chronological sorting
+
+## Dependency Management
+- Whenever adding new python dependencies, use poetry add, do not update pyproject.toml directly

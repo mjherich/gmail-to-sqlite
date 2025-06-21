@@ -9,10 +9,13 @@ import logging
 import os
 import sqlite3
 import sys
-from typing import List, Optional
+from typing import Optional, Dict, Any
+import uuid
 
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import BaseTool
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import SQLChatMessageHistory
 
 from .constants import DATABASE_FILE_NAME
 from .config import settings
@@ -96,12 +99,12 @@ class EnhancedSQLiteTool(BaseTool):
     - "Analyze my email activity by day of week and hour"
     """
 
-    def __init__(self, db_path: str, llm=None, **kwargs):
+    def __init__(self, db_path: str, llm: Any = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._db_path = db_path
         self._llm = llm
-        self._query_cache = {}
-        self._schema_info = None
+        self._query_cache: Dict[str, str] = {}
+        self._schema_info: Optional[str] = None
 
     def _run(self, query: str) -> str:
         """
@@ -128,7 +131,9 @@ class EnhancedSQLiteTool(BaseTool):
                 # Use intelligent SQL generation
                 print(f"🧠 Analyzing: '{query}'")
                 sql_query = self._intelligent_sql_generation(query)
-                print(f"📝 Generated SQL: {sql_query[:150]}{'...' if len(sql_query) > 150 else ''}")
+                print(
+                    f"📝 Generated SQL: {sql_query[:150]}{'...' if len(sql_query) > 150 else ''}"
+                )
 
             # Execute the query
             result = self._execute_sql_query(sql_query)
@@ -152,29 +157,29 @@ class EnhancedSQLiteTool(BaseTool):
             try:
                 conn = sqlite3.connect(self._db_path)
                 cursor = conn.cursor()
-                
+
                 # Get table schema
                 cursor.execute("PRAGMA table_info(messages);")
                 columns = cursor.fetchall()
-                
+
                 schema_parts = ["Table: messages"]
                 schema_parts.append("Columns:")
                 for col in columns:
                     col_name, col_type = col[1], col[2]
                     schema_parts.append(f"  - {col_name}: {col_type}")
-                
+
                 # Get sample data patterns
                 cursor.execute("SELECT COUNT(*) FROM messages")
                 total_count = cursor.fetchone()[0]
                 schema_parts.append(f"\nTotal messages: {total_count}")
-                
+
                 conn.close()
                 self._schema_info = "\n".join(schema_parts)
             except Exception as e:
                 self._schema_info = f"Schema info unavailable: {e}"
-        
+
         return self._schema_info
-    
+
     def _intelligent_sql_generation(self, question: str) -> str:
         """
         Use AI to generate SQL queries from natural language.
@@ -182,10 +187,10 @@ class EnhancedSQLiteTool(BaseTool):
         """
         if self._llm is None:
             return self._fallback_pattern_matching(question)
-        
+
         try:
             schema_context = self._get_schema_info()
-            
+
             sql_prompt = f"""
             You are an expert SQL query generator for Gmail email data analysis.
             
@@ -204,22 +209,22 @@ class EnhancedSQLiteTool(BaseTool):
             
             Return ONLY the SQL query, no explanations.
             """
-            
+
             # Use the LLM to generate SQL
             messages = [{"role": "user", "content": sql_prompt}]
             response = self._llm.call(messages)
             sql_query = response.strip()
-            
+
             # Basic validation
-            if not sql_query.upper().startswith(('SELECT', 'WITH')):
+            if not sql_query.upper().startswith(("SELECT", "WITH")):
                 raise ValueError("Generated query must be a SELECT statement")
-            
+
             return sql_query
-            
+
         except Exception as e:
             print(f"⚠️  AI SQL generation failed: {e}. Using pattern matching.")
             return self._fallback_pattern_matching(question)
-    
+
     def _fallback_pattern_matching(self, question: str) -> str:
         """
         Fallback pattern-matching approach for SQL generation.
@@ -235,7 +240,9 @@ class EnhancedSQLiteTool(BaseTool):
                 break
 
         # Enhanced pattern matching with more sophisticated queries
-        if ("compare" in question_lower and "volume" in question_lower) or ("by month" in question_lower):
+        if ("compare" in question_lower and "volume" in question_lower) or (
+            "by month" in question_lower
+        ):
             return f"""
             SELECT strftime('%Y-%m', timestamp) as month,
                    COUNT(*) as email_count,
@@ -247,7 +254,9 @@ class EnhancedSQLiteTool(BaseTool):
             LIMIT 24
             """
 
-        elif "thread" in question_lower and ("participants" in question_lower or "people" in question_lower):
+        elif "thread" in question_lower and (
+            "participants" in question_lower or "people" in question_lower
+        ):
             return f"""
             SELECT thread_id,
                    COUNT(*) as message_count,
@@ -288,7 +297,10 @@ class EnhancedSQLiteTool(BaseTool):
             """
 
         # Original patterns (enhanced)
-        elif ("who sends me the most emails" in question_lower or "top senders" in question_lower):
+        elif (
+            "who sends me the most emails" in question_lower
+            or "top senders" in question_lower
+        ):
             return f"""
             SELECT sender->>'$.email' as sender_email, 
                    sender->>'$.name' as sender_name,
@@ -396,6 +408,7 @@ class EmailAnalysisAgent:
         self,
         db_path: str,
         model_name: str = "openai/gpt-4.1",
+        session_id: Optional[str] = None,
     ):
         """
         Initialize the email analysis agent.
@@ -403,10 +416,14 @@ class EmailAnalysisAgent:
         Args:
             db_path (str): Path to the SQLite database file.
             model_name (str): The LLM model to use.
+            session_id (str, optional): Session ID for persistent conversation history.
         """
         self.db_path = db_path
-        self.conversation_history: List[str] = []
         self.model_name = model_name
+        self.session_id = session_id or str(uuid.uuid4())
+
+        # Initialize persistent conversation history
+        self.chat_history = self._get_session_history(self.session_id)
 
         # Initialize LLM based on model choice
         if model_name.startswith("gemini/"):
@@ -441,16 +458,16 @@ class EmailAnalysisAgent:
 
         # Create the LLM instance for CrewAI with rate limiting
         self.llm = LLM(
-            model=model_name, 
-            api_key=api_key, 
+            model=model_name,
+            api_key=api_key,
             temperature=0.1,
             max_retries=3,
-            timeout=30
+            timeout=30,
         )
 
         # Initialize the enhanced SQLite tool with AI capabilities
         self.sqlite_tool = EnhancedSQLiteTool(db_path=db_path, llm=self.llm)
-        
+
         # Initialize the EmailPatternAnalyzer tool for advanced analytics
         self.pattern_analyzer = EmailPatternAnalyzer(db_path=db_path)
 
@@ -493,6 +510,46 @@ class EmailAnalysisAgent:
             function_calling_llm=self.llm,  # Use same model for now, can optimize later
             tools=[self.sqlite_tool, self.pattern_analyzer],
         )
+
+    def _get_session_history(self, session_id: str) -> SQLChatMessageHistory:
+        """
+        Get or create a SQLChatMessageHistory for the given session.
+
+        Args:
+            session_id (str): The session identifier.
+
+        Returns:
+            SQLChatMessageHistory: The chat message history for the session.
+        """
+        # Use the same database but different table for chat history
+        connection_string = f"sqlite:///{self.db_path}"
+        return SQLChatMessageHistory(
+            session_id=session_id,
+            connection=connection_string,
+            table_name="chat_message_store",  # Different table from messages
+        )
+
+    def _get_conversation_context(self) -> str:
+        """
+        Get the conversation context from the persistent message history.
+
+        Returns:
+            str: Formatted conversation context.
+        """
+        messages = self.chat_history.messages
+        if not messages:
+            return ""
+
+        # Format the last 10 message exchanges for context
+        context_lines = []
+        for msg in messages[-20:]:  # Last 20 messages (10 exchanges)
+            role = "User" if msg.type == "human" else "Assistant"
+            content = msg.content
+            if isinstance(content, str):
+                content = content[:500] + "..." if len(content) > 500 else content
+                context_lines.append(f"{role}: {content}")
+
+        return "\n".join(context_lines)
 
     def _get_database_schema(self) -> str:
         """
@@ -546,13 +603,11 @@ class EmailAnalysisAgent:
             # Show progress indicator
             print(f"🤔 Processing your question...")
 
-            # Add user message to conversation history
-            self.conversation_history.append(f"User: {user_message}")
+            # Add user message to persistent conversation history
+            self.chat_history.add_user_message(user_message)
 
             # Create context with conversation history
-            context = "\n".join(
-                self.conversation_history[-10:]
-            )  # Keep last 10 exchanges
+            context = self._get_conversation_context()
 
             # Create a task for the agent
             task_description = f"""
@@ -594,8 +649,9 @@ class EmailAnalysisAgent:
                 try:
                     if attempt > 0:
                         import time
+
                         time.sleep(2)  # Brief pause between retries
-                    
+
                     result = crew.kickoff()
                     break
                 except Exception as crew_error:
@@ -608,18 +664,18 @@ class EmailAnalysisAgent:
             # Extract the response
             response = str(result.raw) if hasattr(result, "raw") else str(result)
 
-            # Add agent response to conversation history
-            self.conversation_history.append(f"Assistant: {response}")
+            # Add agent response to persistent conversation history
+            self.chat_history.add_ai_message(response)
 
             return response
 
         except Exception as e:
             import traceback
-            
+
             # Handle specific error types
             error_type = type(e).__name__
             error_message = str(e)
-            
+
             if "RateLimitError" in error_type:
                 user_friendly_msg = (
                     "⏳ Rate limit reached. Please wait a moment and try again.\n"
@@ -627,9 +683,7 @@ class EmailAnalysisAgent:
                 )
                 return user_friendly_msg
             elif "AuthenticationError" in error_type:
-                user_friendly_msg = (
-                    "🔐 Authentication failed. Please check your API keys in .secrets.toml"
-                )
+                user_friendly_msg = "🔐 Authentication failed. Please check your API keys in .secrets.toml"
                 return user_friendly_msg
             elif "NotFoundError" in error_type:
                 user_friendly_msg = (
@@ -640,9 +694,11 @@ class EmailAnalysisAgent:
             else:
                 # Generic error handling
                 error_msg = f"Error processing your message: {e}"
-                detailed_error = f"Error details: {str(e)}\nTraceback: {traceback.format_exc()}"
+                detailed_error = (
+                    f"Error details: {str(e)}\nTraceback: {traceback.format_exc()}"
+                )
                 logger.error(detailed_error)
-                
+
                 return error_msg
 
 
@@ -691,13 +747,14 @@ def show_model_options() -> str:
         print("❌ Invalid choice. Please select 1, 2, or 3.")
 
 
-def start_chat(model: str = "openai") -> None:
+def start_chat(model: str = "openai", session_id: Optional[str] = None) -> None:
     """
     Start an interactive chat session with the email analysis agent.
     Uses data directory from settings.
 
     Args:
         model (str): Model key to use (gemini, openai, anthropic).
+        session_id (str, optional): Session ID for persistent conversation history.
     """
     # Configure chat-specific logging
     setup_chat_logging()
@@ -721,19 +778,33 @@ def start_chat(model: str = "openai") -> None:
 
         print(f"🤖 Using {model_description}")
         print("✅ Enhanced AI-powered analysis enabled")
-        print("💫 Features: Intelligent SQL generation, persistent memory, advanced insights")
+        print(
+            "💫 Features: Intelligent SQL generation, persistent memory, advanced insights"
+        )
 
         # Initialize the agent with selected model
         print(f"\n🤖 Initializing Gmail Analysis Agent...")
-        agent = EmailAnalysisAgent(db_path, model_name=model_name)
+        if session_id:
+            print(f"📝 Using session: {session_id}")
+        agent = EmailAnalysisAgent(
+            db_path, model_name=model_name, session_id=session_id
+        )
 
-        print("✅ Enhanced Agent ready! You can now have intelligent conversations about your Gmail data.")
+        print(
+            "✅ Enhanced Agent ready! You can now have intelligent conversations about your Gmail data."
+        )
         print("💡 Try asking sophisticated questions like:")
-        print("   🔍 Basic: 'Who sends me the most emails?' or 'How many unread emails do I have?'")
-        print("   📊 Advanced: 'Compare my email volume between 2023 and 2024 by month'")
+        print(
+            "   🔍 Basic: 'Who sends me the most emails?' or 'How many unread emails do I have?'"
+        )
+        print(
+            "   📊 Advanced: 'Compare my email volume between 2023 and 2024 by month'"
+        )
         print("   🧵 Threads: 'Find email threads with the most participants'")
         print("   ⏱️ Patterns: 'Analyze my email activity by day of week and hour'")
-        print("   🚀 Complex: 'What are my response time patterns for different contacts?'")
+        print(
+            "   🚀 Complex: 'What are my response time patterns for different contacts?'"
+        )
         print("\n📝 Type 'exit' or 'quit' to end the conversation.")
         print("🔧 Type 'model' to switch AI models.")
         print()
@@ -753,7 +824,13 @@ def start_chat(model: str = "openai") -> None:
                     print("🔧 Switching AI model...")
                     new_model_name = show_model_options()
                     try:
-                        agent = EmailAnalysisAgent(db_path, model_name=new_model_name)
+                        # Preserve the session when switching models
+                        current_session_id = agent.session_id
+                        agent = EmailAnalysisAgent(
+                            db_path,
+                            model_name=new_model_name,
+                            session_id=current_session_id,
+                        )
                         print("✅ Model switched successfully!")
                     except Exception as e:
                         print(f"❌ Failed to switch model: {e}")
@@ -785,6 +862,7 @@ def start_chat(model: str = "openai") -> None:
 def ask_single_question(
     question: str,
     model: str = "openai",
+    session_id: Optional[str] = None,
 ) -> str:
     """
     Ask a single question to the agent without starting interactive chat.
@@ -793,6 +871,7 @@ def ask_single_question(
     Args:
         question (str): The question to ask.
         model (str): Model key to use (gemini, openai, anthropic).
+        session_id (str, optional): Session ID for persistent conversation history.
 
     Returns:
         str: The agent's response.
@@ -811,7 +890,9 @@ def ask_single_question(
 
     try:
         model_name = get_model_name(model)
-        agent = EmailAnalysisAgent(db_path, model_name=model_name)
+        agent = EmailAnalysisAgent(
+            db_path, model_name=model_name, session_id=session_id
+        )
         return agent.chat(question)
     except Exception as e:
         return f"❌ Error: {e}"

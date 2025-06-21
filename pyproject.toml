@@ -3,7 +3,7 @@ name = "gmail-to-sqlite"
 version = "0.2.0"
 description = "A robust Python application that syncs Gmail messages to a local SQLite database for analysis and archival purposes."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<=3.13"
 license = { file = "LICENSE" }
 keywords = ["gmail", "sqlite", "email", "sync", "backup", "archive"]
 dependencies = [
@@ -17,6 +17,8 @@ dependencies = [
     "crewai[tools]>=0.1.7",
     "dynaconf>=3.2.11",
     "crewai-tools>=0.47.1",
+    "langchain-core (>=0.3.66,<0.4.0)",
+    "langchain-community (>=0.3.26,<0.4.0)",
 ]
 
 [project.optional-dependencies]

@@ -4,24 +4,21 @@ Modern multi-turn chat interface using AI agents for Gmail data analysis.
 This module provides a beautifully designed interactive chat CLI where users can have
 ongoing conversations with specialized AI agents for analyzing Gmail data.
 
-This is the new implementation with:
+Features:
 - Beautiful terminal UI using Rich library
 - Modular agent architecture following CrewAI best practices 
 - Enhanced error handling and user feedback
 - Persistent conversation memory
 - Multiple AI model support (Gemini, OpenAI, Claude)
 - Intelligent SQL generation with visual feedback
-
-For backward compatibility, all original functions are maintained.
 """
 
 import logging
 from typing import Optional
 
-# Import the new modular implementation
 from .core import ChatSession
 from .core.errors import ChatError
-from .core.models import ModelManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +68,10 @@ def ask_single_question(
         return f"❌ Error: {e}"
 
 
-# Backward compatibility functions
+# Keep these functions for backward compatibility
 def get_model_name(model_key: str) -> str:
     """Get the full model name from a simple key (backward compatibility)."""
+    from .core.models import ModelManager
     try:
         config = ModelManager.get_model_config(model_key)
         return config.full_identifier
@@ -84,6 +82,7 @@ def get_model_name(model_key: str) -> str:
 def show_model_options() -> str:
     """Display available models and let user choose (backward compatibility)."""
     from .ui import ChatDisplay
+    from .core.models import ModelManager
     
     display = ChatDisplay()
     return display.show_model_selection(ModelManager.MODEL_SELECTION)
@@ -102,19 +101,4 @@ MODEL_DESCRIPTIONS = {
     "anthropic": "Claude 3.5 Sonnet (Most Capable)",
 }
 
-# Re-export for compatibility
-ChatError = ChatError
-
-# Import the old classes for backward compatibility if needed
-try:
-    from .agents.email_analyst import EmailAnalysisAgent
-    from .agents.tools import EnhancedSQLiteTool
-except ImportError:
-    # Fallback to a simple implementation if the new modules aren't available
-    class EmailAnalysisAgent:
-        def __init__(self, *args, **kwargs):
-            raise NotImplementedError("New modular implementation not available")
-    
-    class EnhancedSQLiteTool:
-        def __init__(self, *args, **kwargs):
-            raise NotImplementedError("New modular implementation not available")
+ChatError = ChatError  # Re-export for compatibility

@@ -1,0 +1,965 @@
+"""
+Multi-turn chat interface using AI agents for Gmail data analysis.
+
+This module provides an interactive chat CLI where users can have ongoing
+conversations with AI agents specialized in analyzing Gmail data.
+"""
+
+import logging
+import os
+import sqlite3
+import sys
+from typing import Optional, Dict, Any
+import uuid
+
+from crewai import Agent, Task, Crew, Process, LLM
+from crewai.tools import BaseTool
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.runnables.base import Runnable
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_community.chat_message_histories import SQLChatMessageHistory
+
+from .constants import DATABASE_FILE_NAME
+from .config import settings
+from .tools import EmailPatternAnalyzer
+
+
+logger = logging.getLogger(__name__)
+
+
+# Model mapping from simple names to full model identifiers
+MODEL_MAP = {
+    "gemini": "gemini/gemini-2.0-flash-exp",
+    "openai": "openai/gpt-4.1",
+    "anthropic": "anthropic/claude-3-5-sonnet-20241022",
+}
+
+# Model descriptions for display
+MODEL_DESCRIPTIONS = {
+    "gemini": "Gemini 2.0 Flash Exp (Latest & Fast)",
+    "openai": "OpenAI GPT-4.1 (Latest & Most Capable)",
+    "anthropic": "Claude 3.5 Sonnet (Most Capable)",
+}
+
+
+class ChatError(Exception):
+    """Custom exception for chat-related errors."""
+
+    pass
+
+
+def setup_chat_logging() -> None:
+    """Configure logging for chat mode to reduce noise from LiteLLM and other libraries."""
+    # Suppress verbose logging from external libraries
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+    logging.getLogger("litellm").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("crewai").setLevel(logging.WARNING)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("anthropic").setLevel(logging.WARNING)
+    logging.getLogger("google").setLevel(logging.WARNING)
+
+    # Keep our own logger at INFO level
+    logging.getLogger("gmail_to_sqlite").setLevel(logging.INFO)
+
+
+class EnhancedSQLiteTool(BaseTool):
+    """An intelligent CrewAI tool for executing SQL queries against SQLite databases with AI-powered query generation."""
+
+    name: str = "Enhanced SQLite Query Tool"
+    description: str = """
+    Execute intelligent SQL queries against a SQLite database containing Gmail messages.
+    
+    This tool can:
+    1. Convert complex natural language questions to optimized SQL queries using AI
+    2. Handle advanced queries with JOINs, subqueries, and complex aggregations
+    3. Provide query optimization and validation
+    4. Return formatted results with insights
+    5. Cache common queries for better performance
+    
+    The database contains a 'messages' table with these columns:
+    - message_id: Unique Gmail message ID  
+    - thread_id: Gmail thread ID
+    - sender: JSON with sender name and email
+    - recipients: JSON with to/cc/bcc recipients
+    - labels: JSON array of Gmail labels
+    - subject: Email subject line
+    - body: Email body content (plain text)
+    - size: Message size in bytes
+    - timestamp: When the message was sent/received
+    - is_read: Boolean if message is read
+    - is_outgoing: Boolean if sent by user
+    - is_deleted: Boolean if deleted from Gmail
+    - last_indexed: When message was last synced
+    
+    Can handle complex queries like:
+    - "Compare my email volume between 2023 and 2024 by month"
+    - "Find email threads with the most participants"
+    - "Show me the response time patterns for different contacts"
+    - "Analyze my email activity by day of week and hour"
+    """
+
+    def __init__(self, db_path: str, llm: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._db_path = db_path
+        self._llm = llm
+        self._query_cache: Dict[str, str] = {}
+        self._schema_info: Optional[str] = None
+
+    def _run(self, query: str) -> str:
+        """
+        Execute a SQL query or convert natural language to SQL and execute it.
+
+        Args:
+            query: Either a natural language question or SQL query
+
+        Returns:
+            Formatted query results
+        """
+        try:
+            # Check if it's already a SQL query
+            query_upper = query.strip().upper()
+            if any(
+                query_upper.startswith(cmd)
+                for cmd in ["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"]
+            ):
+                sql_query = query
+                print(
+                    f"🔍 Executing SQL: {sql_query[:100]}{'...' if len(sql_query) > 100 else ''}"
+                )
+            else:
+                # Use intelligent SQL generation
+                print(f"🧠 Analyzing: '{query}'")
+                sql_query = self._intelligent_sql_generation(query)
+                print(
+                    f"📝 Generated SQL: {sql_query[:150]}{'...' if len(sql_query) > 150 else ''}"
+                )
+
+            # Execute the query
+            result = self._execute_sql_query(sql_query)
+
+            lines = result.split("\n")
+            result_preview = "\n".join(lines[:5])
+            if len(lines) > 5:
+                result_preview += f"\n   ... ({len(lines) - 5} more lines)"
+            print(f"📊 Query returned: {result_preview}")
+
+            return result
+
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            print(f"❌ SQL Error: {error_msg}")
+            return error_msg
+
+    def _get_schema_info(self) -> str:
+        """Get cached schema information for context."""
+        if self._schema_info is None:
+            try:
+                conn = sqlite3.connect(self._db_path)
+                cursor = conn.cursor()
+
+                # Get table schema
+                cursor.execute("PRAGMA table_info(messages);")
+                columns = cursor.fetchall()
+
+                schema_parts = ["Table: messages"]
+                schema_parts.append("Columns:")
+                for col in columns:
+                    col_name, col_type = col[1], col[2]
+                    schema_parts.append(f"  - {col_name}: {col_type}")
+
+                # Get sample data patterns
+                cursor.execute("SELECT COUNT(*) FROM messages")
+                total_count = cursor.fetchone()[0]
+                schema_parts.append(f"\nTotal messages: {total_count}")
+
+                conn.close()
+                self._schema_info = "\n".join(schema_parts)
+            except Exception as e:
+                self._schema_info = f"Schema info unavailable: {e}"
+
+        return self._schema_info
+
+    def _intelligent_sql_generation(self, question: str) -> str:
+        """
+        Use AI to generate SQL queries from natural language.
+        Falls back to pattern matching if AI is unavailable.
+        """
+        if self._llm is None:
+            return self._fallback_pattern_matching(question)
+
+        try:
+            schema_context = self._get_schema_info()
+
+            sql_prompt = f"""
+            You are an expert SQL query generator for Gmail email data analysis.
+            
+            Database Schema:
+            {schema_context}
+            
+            User Question: "{question}"
+            
+            Generate a SQLite query to answer this question. Follow these guidelines:
+            1. Use proper SQLite syntax
+            2. Handle JSON fields with -> and ->> operators for sender/recipients
+            3. Use date functions like strftime() for date filtering
+            4. Add appropriate LIMIT clauses for large result sets
+            5. Include helpful column aliases
+            6. Optimize for performance
+            
+            Return ONLY the SQL query, no explanations.
+            """
+
+            # Use the LLM to generate SQL
+            messages = [{"role": "user", "content": sql_prompt}]
+            response = self._llm.call(messages)
+            sql_query = response.strip()
+
+            # Basic validation
+            if not sql_query.upper().startswith(("SELECT", "WITH")):
+                raise ValueError("Generated query must be a SELECT statement")
+
+            return sql_query
+
+        except Exception as e:
+            print(f"⚠️  AI SQL generation failed: {e}. Using pattern matching.")
+            return self._fallback_pattern_matching(question)
+
+    def _fallback_pattern_matching(self, question: str) -> str:
+        """
+        Fallback pattern-matching approach for SQL generation.
+        Enhanced version of the original method.
+        """
+        question_lower = question.lower()
+
+        # Extract year filters if present
+        year_filter = ""
+        for year in range(2000, 2030):
+            if str(year) in question_lower:
+                year_filter = f" AND strftime('%Y', timestamp) = '{year}'"
+                break
+
+        # Enhanced pattern matching with more sophisticated queries
+        if ("compare" in question_lower and "volume" in question_lower) or (
+            "by month" in question_lower
+        ):
+            return f"""
+            SELECT strftime('%Y-%m', timestamp) as month,
+                   COUNT(*) as email_count,
+                   AVG(size) as avg_size
+            FROM messages 
+            WHERE 1=1{year_filter}
+            GROUP BY strftime('%Y-%m', timestamp)
+            ORDER BY month DESC
+            LIMIT 24
+            """
+
+        elif "thread" in question_lower and (
+            "participants" in question_lower or "people" in question_lower
+        ):
+            return f"""
+            SELECT thread_id,
+                   COUNT(*) as message_count,
+                   COUNT(DISTINCT sender->>'$.email') as unique_senders,
+                   MIN(timestamp) as thread_start,
+                   MAX(timestamp) as thread_end
+            FROM messages 
+            WHERE 1=1{year_filter}
+            GROUP BY thread_id
+            HAVING message_count > 1
+            ORDER BY unique_senders DESC, message_count DESC
+            LIMIT 10
+            """
+
+        elif "response time" in question_lower or "reply time" in question_lower:
+            return f"""
+            SELECT sender->>'$.email' as contact,
+                   AVG(julianday(timestamp) - julianday(LAG(timestamp) OVER (ORDER BY timestamp))) * 24 * 60 as avg_response_minutes,
+                   COUNT(*) as email_count
+            FROM messages 
+            WHERE is_outgoing = 0{year_filter}
+            GROUP BY sender->>'$.email'
+            HAVING email_count > 5
+            ORDER BY avg_response_minutes ASC
+            LIMIT 10
+            """
+
+        elif "day of week" in question_lower or "hour" in question_lower:
+            return f"""
+            SELECT strftime('%w', timestamp) as day_of_week,
+                   strftime('%H', timestamp) as hour,
+                   COUNT(*) as email_count
+            FROM messages 
+            WHERE 1=1{year_filter}
+            GROUP BY day_of_week, hour
+            ORDER BY email_count DESC
+            LIMIT 20
+            """
+
+        # Original patterns (enhanced)
+        elif (
+            "who sends me the most emails" in question_lower
+            or "top senders" in question_lower
+        ):
+            return f"""
+            SELECT sender->>'$.email' as sender_email, 
+                   sender->>'$.name' as sender_name,
+                   COUNT(*) as email_count,
+                   MAX(timestamp) as last_email
+            FROM messages 
+            WHERE is_outgoing = 0{year_filter}
+            GROUP BY sender->>'$.email', sender->>'$.name'
+            ORDER BY email_count DESC 
+            LIMIT 15
+            """
+
+        elif "unread" in question_lower:
+            return f"""
+            SELECT COUNT(*) as unread_count,
+                   COUNT(CASE WHEN is_outgoing = 0 THEN 1 END) as unread_received,
+                   COUNT(CASE WHEN is_outgoing = 1 THEN 1 END) as unread_sent
+            FROM messages 
+            WHERE is_read = 0{year_filter}
+            """
+
+        elif "last week" in question_lower or "past week" in question_lower:
+            return f"""
+            SELECT DATE(timestamp) as date,
+                   COUNT(*) as daily_count,
+                   COUNT(CASE WHEN is_outgoing = 0 THEN 1 END) as received,
+                   COUNT(CASE WHEN is_outgoing = 1 THEN 1 END) as sent
+            FROM messages 
+            WHERE timestamp >= date('now', '-7 days'){year_filter}
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
+            """
+
+        else:
+            # Enhanced default query with more context
+            return f"""
+            SELECT subject, 
+                   sender->>'$.email' as sender, 
+                   timestamp,
+                   is_read,
+                   is_outgoing,
+                   CASE WHEN length(body) > 100 THEN substr(body, 1, 100) || '...' ELSE body END as preview
+            FROM messages 
+            WHERE 1=1{year_filter}
+            ORDER BY timestamp DESC
+            LIMIT 10
+            """
+
+    def _execute_sql_query(self, sql_query: str) -> str:
+        """Execute a SQL query and return formatted results."""
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cursor = conn.cursor()
+
+            cursor.execute(sql_query)
+            results = cursor.fetchall()
+
+            # Get column names
+            column_names = (
+                [description[0] for description in cursor.description]
+                if cursor.description
+                else []
+            )
+
+            conn.close()
+
+            if not results:
+                return "No results found."
+
+            # Format results as a simple table
+            if column_names:
+                result_lines = [" | ".join(column_names)]
+                result_lines.append("-" * len(result_lines[0]))
+
+                for row in results[:20]:  # Limit to 20 rows for readability
+                    formatted_row = []
+                    for value in row:
+                        if value is None:
+                            formatted_row.append("NULL")
+                        else:
+                            str_value = str(value)
+                            # Truncate long values
+                            if len(str_value) > 50:
+                                str_value = str_value[:47] + "..."
+                            formatted_row.append(str_value)
+                    result_lines.append(" | ".join(formatted_row))
+
+                if len(results) > 20:
+                    result_lines.append(
+                        f"... ({len(results)} total rows, showing first 20)"
+                    )
+
+                return "\n".join(result_lines)
+            else:
+                return f"Query executed successfully. {len(results)} rows affected."
+
+        except Exception as e:
+            return f"SQL Error: {e}"
+
+
+class CrewAIRunnable(Runnable):
+    """
+    LangChain Runnable wrapper for CrewAI agents.
+
+    This allows CrewAI agents to be used with LangChain's RunnableWithMessageHistory
+    and other LangChain patterns for enhanced message handling and error recovery.
+    """
+
+    def __init__(self, crew_agent: Agent, db_path: str, llm: Any):
+        """
+        Initialize the runnable wrapper.
+
+        Args:
+            crew_agent: The CrewAI agent to wrap
+            db_path: Path to the database for context
+            llm: The LLM instance for the agent
+        """
+        self.crew_agent = crew_agent
+        self.db_path = db_path
+        self.llm = llm
+        self.sqlite_tool = None
+        self.pattern_analyzer = None
+
+    def set_tools(self, sqlite_tool: Any, pattern_analyzer: Any) -> None:
+        """Set the tools for the agent."""
+        self.sqlite_tool = sqlite_tool
+        self.pattern_analyzer = pattern_analyzer
+
+    def invoke(
+        self, input_data: Dict[str, Any], config: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Invoke the CrewAI agent with LangChain-compatible interface.
+
+        Args:
+            input_data: Input containing 'input' key with user message
+            config: Optional configuration (not used)
+
+        Returns:
+            str: The agent's response
+        """
+        try:
+            user_message = input_data.get("input", "")
+            if not user_message:
+                return "No input provided."
+
+            # Create a task for the CrewAI agent
+            task_description = f"""
+            Current user message: {user_message}
+            
+            Instructions:
+            1. Respond naturally to the user's question or request
+            2. If they're asking for data analysis, use the SQLite Query Tool to query the database
+            3. When using the SQLite Query Tool, you can pass either natural language questions or SQL queries
+            4. Provide clear insights based on the query results
+            5. If they're asking about email patterns, provide helpful analysis
+            6. Be helpful and informative
+            
+            Remember: You have access to a SQLite database containing Gmail messages. Use the SQLite Query Tool
+            to answer questions that require querying the database.
+            """
+
+            task = Task(
+                description=task_description,
+                expected_output="A helpful, conversational response that addresses the user's question about their Gmail data, including any query results if data analysis was requested.",
+                agent=self.crew_agent,
+            )
+
+            # Create a crew with just this agent and task
+            crew = Crew(
+                agents=[self.crew_agent],
+                tasks=[task],
+                process=Process.sequential,
+                verbose=False,
+            )
+
+            # Execute the task with retry logic
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    if attempt > 0:
+                        import time
+
+                        time.sleep(2)  # Brief pause between retries
+
+                    result = crew.kickoff()
+                    break
+                except Exception as crew_error:
+                    error_type = type(crew_error).__name__
+                    if "RateLimitError" in error_type and attempt < max_retries:
+                        continue
+                    else:
+                        raise crew_error
+
+            # Extract the response
+            response = str(result.raw) if hasattr(result, "raw") else str(result)
+            return response
+
+        except Exception as e:
+            # Handle specific error types with user-friendly messages
+            error_type = type(e).__name__
+
+            if "RateLimitError" in error_type:
+                return "⏳ Rate limit reached. Please wait a moment and try again."
+            elif "AuthenticationError" in error_type:
+                return "🔐 Authentication failed. Please check your API keys in .secrets.toml"
+            elif "NotFoundError" in error_type:
+                return "🔍 Model not found. Try switching to a different model."
+            else:
+                return f"Error processing your message: {e}"
+
+
+class EmailAnalysisAgent:
+    """CrewAI agent specialized in email data analysis with LangChain integration."""
+
+    def __init__(
+        self,
+        db_path: str,
+        model_name: str = "openai/gpt-4.1",
+        session_id: Optional[str] = None,
+    ):
+        """
+        Initialize the email analysis agent.
+
+        Args:
+            db_path (str): Path to the SQLite database file.
+            model_name (str): The LLM model to use.
+            session_id (str, optional): Session ID for persistent conversation history.
+        """
+        self.db_path = db_path
+        self.model_name = model_name
+        self.session_id = session_id or str(uuid.uuid4())
+
+        # Initialize persistent conversation history
+        self.chat_history = self._get_session_history(self.session_id)
+
+        # Initialize LLM based on model choice
+        if model_name.startswith("gemini/"):
+            api_key = settings.get("GOOGLE_API_KEY")
+            if not api_key:
+                raise ChatError(
+                    "Google API key not found. Please set the GOOGLE_API_KEY in .secrets.toml.\n\n"
+                    "Configuration:\n"
+                    'Add to .secrets.toml: GOOGLE_API_KEY = "your-key-here"\n\n'
+                    "Get your API key from: https://aistudio.google.com/app/apikey"
+                )
+        elif model_name.startswith("openai/"):
+            api_key = settings.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ChatError(
+                    "OpenAI API key not found. Please set the OPENAI_API_KEY in .secrets.toml.\n\n"
+                    "Configuration:\n"
+                    'Add to .secrets.toml: OPENAI_API_KEY = "your-key-here"\n\n'
+                    "Get your API key from: https://platform.openai.com/api-keys"
+                )
+        elif model_name.startswith("anthropic/"):
+            api_key = settings.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ChatError(
+                    "Anthropic API key not found. Please set the ANTHROPIC_API_KEY in .secrets.toml.\n\n"
+                    "Configuration:\n"
+                    'Add to .secrets.toml: ANTHROPIC_API_KEY = "your-key-here"\n\n'
+                    "Get your API key from: https://console.anthropic.com/"
+                )
+        else:
+            raise ChatError(f"Unsupported model: {model_name}")
+
+        # Create the LLM instance for CrewAI with rate limiting
+        self.llm = LLM(
+            model=model_name,
+            api_key=api_key,
+            temperature=0.1,
+            max_retries=3,
+            timeout=30,
+        )
+
+        # Initialize the enhanced SQLite tool with AI capabilities
+        self.sqlite_tool = EnhancedSQLiteTool(db_path=db_path, llm=self.llm)
+
+        # Initialize the EmailPatternAnalyzer tool for advanced analytics
+        self.pattern_analyzer = EmailPatternAnalyzer(db_path=db_path)
+
+        # Get database schema for context
+        self.db_schema = self._get_database_schema()
+
+        # Create the enhanced CrewAI agent with advanced capabilities
+        self.agent = Agent(
+            role="Gmail Data Analyst & Insights Expert",
+            goal="Provide deep, actionable insights about Gmail data through intelligent analysis and natural conversation",
+            backstory=f"""You are a world-class data analyst and email intelligence expert with deep expertise in:
+            
+            📊 **Data Analysis**: Advanced statistical analysis, pattern recognition, and trend identification
+            📧 **Email Analytics**: Communication patterns, productivity insights, and relationship mapping  
+            🧠 **Context Awareness**: Remember previous conversations and build upon past insights
+            💡 **Strategic Thinking**: Provide actionable recommendations based on data patterns
+            
+            **Your Database**: Gmail messages with schema:
+            {self.db_schema}
+            
+            **Your Capabilities**:
+            - Generate intelligent SQL queries for complex analysis using AI-powered query generation
+            - Perform advanced pattern analysis using the EmailPatternAnalyzer tool
+            - Identify meaningful patterns and trends in email data
+            - Analyze volume trends, response times, activity patterns, and communication networks
+            - Provide explanations and context for all findings
+            - Remember conversation history and build upon previous insights
+            - Suggest follow-up analyses and interesting questions
+            - Translate data into actionable productivity and communication insights
+            
+            **Your Approach**: Always explain what you're analyzing, why it's interesting, and what the user can learn from it. 
+            Don't just show data - provide insights, context, and recommendations. Use your enhanced SQL capabilities to 
+            answer complex questions that go beyond simple pattern matching.""",
+            llm=self.llm,
+            verbose=False,
+            memory=True,  # Enhanced persistent memory
+            respect_context_window=True,  # Auto-manage context limits
+            allow_delegation=False,
+            max_rpm=30,  # Rate limiting for cost control
+            function_calling_llm=self.llm,  # Use same model for now, can optimize later
+            tools=[self.sqlite_tool, self.pattern_analyzer],
+        )
+
+        # Create LangChain-compatible runnable wrapper
+        self.agent_runnable = CrewAIRunnable(self.agent, db_path, self.llm)
+        self.agent_runnable.set_tools(self.sqlite_tool, self.pattern_analyzer)
+
+        # Wrap with RunnableWithMessageHistory for enhanced message handling
+        self.agent_with_history = RunnableWithMessageHistory(
+            self.agent_runnable,
+            lambda session_id: self._get_session_history(session_id),
+            input_messages_key="input",
+            history_messages_key="chat_history",
+        )
+
+    def _get_session_history(self, session_id: str) -> SQLChatMessageHistory:
+        """
+        Get or create a SQLChatMessageHistory for the given session.
+
+        Args:
+            session_id (str): The session identifier.
+
+        Returns:
+            SQLChatMessageHistory: The chat message history for the session.
+        """
+        # Use the same database but different table for chat history
+        connection_string = f"sqlite:///{self.db_path}"
+        return SQLChatMessageHistory(
+            session_id=session_id,
+            connection=connection_string,
+            table_name="chat_message_store",  # Different table from messages
+        )
+
+    def _get_conversation_context(self) -> str:
+        """
+        Get the conversation context from the persistent message history.
+
+        Returns:
+            str: Formatted conversation context.
+        """
+        messages = self.chat_history.messages
+        if not messages:
+            return ""
+
+        # Format the last 10 message exchanges for context
+        context_lines = []
+        for msg in messages[-20:]:  # Last 20 messages (10 exchanges)
+            role = "User" if msg.type == "human" else "Assistant"
+            content = msg.content
+            if isinstance(content, str):
+                content = content[:500] + "..." if len(content) > 500 else content
+                context_lines.append(f"{role}: {content}")
+
+        return "\n".join(context_lines)
+
+    def _get_database_schema(self) -> str:
+        """
+        Extract the database schema for context.
+
+        Returns:
+            str: A formatted string describing the database schema.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            schema_parts = []
+
+            # Get all table names
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = cursor.fetchall()
+
+            for table in tables:
+                table_name = table[0]
+                schema_parts.append(f"Table: {table_name}")
+
+                # Get column information
+                cursor.execute(f"PRAGMA table_info({table_name});")
+                columns = cursor.fetchall()
+
+                schema_parts.append("Columns:")
+                for col in columns:
+                    col_name, col_type = col[1], col[2]
+                    schema_parts.append(f"  - {col_name}: {col_type}")
+
+                schema_parts.append("")  # Empty line between tables
+
+            conn.close()
+            return "\n".join(schema_parts)
+
+        except Exception as e:
+            logger.warning(f"Could not read database schema: {e}")
+            return "Database schema not available"
+
+    def chat(self, user_message: str) -> str:
+        """
+        Process a user message and return the agent's response using RunnableWithMessageHistory.
+
+        Args:
+            user_message (str): The user's message.
+
+        Returns:
+            str: The agent's response.
+        """
+        try:
+            # Show progress indicator
+            print(f"🤔 Processing your question...")
+
+            # Use RunnableWithMessageHistory for enhanced message handling
+            response = self.agent_with_history.invoke(
+                {"input": user_message},
+                config={"configurable": {"session_id": self.session_id}},
+            )
+
+            return response
+
+        except Exception as e:
+            import traceback
+
+            # Handle specific error types
+            error_type = type(e).__name__
+
+            if "RateLimitError" in error_type:
+                user_friendly_msg = (
+                    "⏳ Rate limit reached. Please wait a moment and try again.\n"
+                    "This can happen when making too many requests too quickly."
+                )
+                return user_friendly_msg
+            elif "AuthenticationError" in error_type:
+                user_friendly_msg = "🔐 Authentication failed. Please check your API keys in .secrets.toml"
+                return user_friendly_msg
+            elif "NotFoundError" in error_type:
+                user_friendly_msg = (
+                    "🔍 Model not found or not available. Try switching to a different model.\n"
+                    "Use 'model' command or --model flag with: gemini, openai, or anthropic"
+                )
+                return user_friendly_msg
+            else:
+                # Generic error handling
+                error_msg = f"Error processing your message: {e}"
+                detailed_error = (
+                    f"Error details: {str(e)}\nTraceback: {traceback.format_exc()}"
+                )
+                logger.error(detailed_error)
+
+                return error_msg
+
+
+def get_model_name(model_key: str) -> str:
+    """
+    Get the full model name from a simple key.
+
+    Args:
+        model_key (str): Simple model key (gemini, openai, anthropic)
+
+    Returns:
+        str: Full model identifier
+    """
+    return MODEL_MAP.get(model_key, MODEL_MAP["gemini"])
+
+
+def show_model_options() -> str:
+    """
+    Display available models and let user choose.
+    Used only when no model is specified via CLI.
+
+    Returns:
+        str: The selected model name.
+    """
+    models = {
+        "1": ("gemini", "Gemini 2.5 Pro (Default - Latest & Advanced)"),
+        "2": ("openai", "OpenAI GPT-4o (Balanced)"),
+        "3": ("anthropic", "Claude 3.5 Sonnet (Most Capable)"),
+    }
+
+    print("\n🤖 Available AI Models:")
+    for key, (model_key, description) in models.items():
+        print(f"   {key}. {description}")
+
+    while True:
+        choice = input("\nSelect model (1-3) or press Enter for default: ").strip()
+
+        if not choice:  # Default
+            return get_model_name("openai")
+
+        if choice in models:
+            selected_model_key = models[choice][0]
+            print(f"✅ Selected: {models[choice][1]}")
+            return get_model_name(selected_model_key)
+
+        print("❌ Invalid choice. Please select 1, 2, or 3.")
+
+
+def start_chat(model: str = "openai", session_id: Optional[str] = None) -> None:
+    """
+    Start an interactive chat session with the email analysis agent.
+    Uses data directory from settings.
+
+    Args:
+        model (str): Model key to use (gemini, openai, anthropic).
+        session_id (str, optional): Session ID for persistent conversation history.
+    """
+    # Configure chat-specific logging
+    setup_chat_logging()
+
+    data_dir = settings.get("DATA_DIR")
+    if not data_dir:
+        raise ChatError("DATA_DIR not configured in settings")
+
+    db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
+
+    # Check if database exists
+    if not os.path.exists(db_path):
+        print(f"❌ Database not found at {db_path}")
+        print("Please sync your Gmail data first using: gmail-to-sqlite sync")
+        return
+
+    try:
+        # Get the full model name
+        model_name = get_model_name(model)
+        model_description = MODEL_DESCRIPTIONS.get(model, "Unknown Model")
+
+        print(f"🤖 Using {model_description}")
+        print("✅ Enhanced AI-powered analysis enabled")
+        print(
+            "💫 Features: Intelligent SQL generation, persistent memory, advanced insights"
+        )
+
+        # Initialize the agent with selected model
+        print(f"\n🤖 Initializing Gmail Analysis Agent...")
+        if session_id:
+            print(f"📝 Using session: {session_id}")
+        agent = EmailAnalysisAgent(
+            db_path, model_name=model_name, session_id=session_id
+        )
+
+        print(
+            "✅ Enhanced Agent ready! You can now have intelligent conversations about your Gmail data."
+        )
+        print("💡 Try asking sophisticated questions like:")
+        print(
+            "   🔍 Basic: 'Who sends me the most emails?' or 'How many unread emails do I have?'"
+        )
+        print(
+            "   📊 Advanced: 'Compare my email volume between 2023 and 2024 by month'"
+        )
+        print("   🧵 Threads: 'Find email threads with the most participants'")
+        print("   ⏱️ Patterns: 'Analyze my email activity by day of week and hour'")
+        print(
+            "   🚀 Complex: 'What are my response time patterns for different contacts?'"
+        )
+        print("\n📝 Type 'exit' or 'quit' to end the conversation.")
+        print("🔧 Type 'model' to switch AI models.")
+        print()
+
+        while True:
+            try:
+                # Get user input
+                user_input = input("You: ").strip()
+
+                # Check for exit commands
+                if user_input.lower() in ["exit", "quit", "bye"]:
+                    print("👋 Goodbye! Thanks for chatting about your Gmail data.")
+                    break
+
+                # Check for model switch command
+                if user_input.lower() == "model":
+                    print("🔧 Switching AI model...")
+                    new_model_name = show_model_options()
+                    try:
+                        # Preserve the session when switching models
+                        current_session_id = agent.session_id
+                        agent = EmailAnalysisAgent(
+                            db_path,
+                            model_name=new_model_name,
+                            session_id=current_session_id,
+                        )
+                        print("✅ Model switched successfully!")
+                    except Exception as e:
+                        print(f"❌ Failed to switch model: {e}")
+                    continue
+
+                if not user_input:
+                    continue
+
+                # Get agent response
+                print("🤖 Agent: ", end="", flush=True)
+                response = agent.chat(user_input)
+                print(response)
+                print()  # Empty line for readability
+
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye! Thanks for chatting about your Gmail data.")
+                break
+            except EOFError:
+                print("\n👋 Goodbye! Thanks for chatting about your Gmail data.")
+                break
+
+    except ChatError as e:
+        print(f"❌ Chat initialization failed: {e}")
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        logger.error(f"Unexpected error in chat: {e}")
+
+
+def ask_single_question(
+    question: str,
+    model: str = "openai",
+    session_id: Optional[str] = None,
+) -> str:
+    """
+    Ask a single question to the agent without starting interactive chat.
+    Uses data directory from settings.
+
+    Args:
+        question (str): The question to ask.
+        model (str): Model key to use (gemini, openai, anthropic).
+        session_id (str, optional): Session ID for persistent conversation history.
+
+    Returns:
+        str: The agent's response.
+    """
+    # Configure chat-specific logging for single questions too
+    setup_chat_logging()
+
+    data_dir = settings.get("DATA_DIR")
+    if not data_dir:
+        return "❌ DATA_DIR not configured in settings"
+
+    db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
+
+    if not os.path.exists(db_path):
+        return f"❌ Database not found at {db_path}. Please sync your Gmail data first."
+
+    try:
+        model_name = get_model_name(model)
+        agent = EmailAnalysisAgent(
+            db_path, model_name=model_name, session_id=session_id
+        )
+        return agent.chat(question)
+    except Exception as e:
+        return f"❌ Error: {e}"

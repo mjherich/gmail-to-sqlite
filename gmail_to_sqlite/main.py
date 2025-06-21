@@ -108,7 +108,7 @@ Examples:
   %(prog)s sync-message --message-id abc123 --account work
   %(prog)s chat --question "Who sent me the most emails?"
   %(prog)s chat --model openai
-  %(prog)s chat -m claude
+  %(prog)s chat -m anthropic
   %(prog)s chat
         """,
     )
@@ -148,9 +148,9 @@ Examples:
     parser.add_argument(
         "--model",
         "-m",
-        choices=["gemini", "openai", "claude"],
-        default="gemini",
-        help="AI model to use for chat (default: gemini)",
+        choices=["gemini", "openai", "anthropic"],
+        default="openai",
+        help="AI model to use for chat (default: openai)",
     )
     
     parser.add_argument(

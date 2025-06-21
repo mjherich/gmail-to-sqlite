@@ -24,16 +24,16 @@ logger = logging.getLogger(__name__)
 
 # Model mapping from simple names to full model identifiers
 MODEL_MAP = {
-    "gemini": "gemini/gemini-2.5-pro",
-    "openai": "openai/gpt-4o",
-    "claude": "anthropic/claude-sonnet-4",
+    "gemini": "gemini/gemini-2.0-flash-exp",
+    "openai": "openai/gpt-4.1",
+    "anthropic": "anthropic/claude-3-5-sonnet-20241022",
 }
 
 # Model descriptions for display
 MODEL_DESCRIPTIONS = {
-    "gemini": "Gemini 2.5 Pro (Latest & Advanced)",
-    "openai": "OpenAI GPT-4o (Balanced)",
-    "claude": "Claude Sonnet 4 (Most Capable)",
+    "gemini": "Gemini 2.0 Flash Exp (Latest & Fast)",
+    "openai": "OpenAI GPT-4.1 (Latest & Most Capable)",
+    "anthropic": "Claude 3.5 Sonnet (Most Capable)",
 }
 
 
@@ -395,7 +395,7 @@ class EmailAnalysisAgent:
     def __init__(
         self,
         db_path: str,
-        model_name: str = "gemini/gemini-2.5-pro",
+        model_name: str = "openai/gpt-4.1",
     ):
         """
         Initialize the email analysis agent.
@@ -634,7 +634,7 @@ class EmailAnalysisAgent:
             elif "NotFoundError" in error_type:
                 user_friendly_msg = (
                     "🔍 Model not found or not available. Try switching to a different model.\n"
-                    "Use 'model' command or --model flag with: gemini, openai, or claude"
+                    "Use 'model' command or --model flag with: gemini, openai, or anthropic"
                 )
                 return user_friendly_msg
             else:
@@ -651,7 +651,7 @@ def get_model_name(model_key: str) -> str:
     Get the full model name from a simple key.
 
     Args:
-        model_key (str): Simple model key (gemini, openai, claude)
+        model_key (str): Simple model key (gemini, openai, anthropic)
 
     Returns:
         str: Full model identifier
@@ -670,7 +670,7 @@ def show_model_options() -> str:
     models = {
         "1": ("gemini", "Gemini 2.5 Pro (Default - Latest & Advanced)"),
         "2": ("openai", "OpenAI GPT-4o (Balanced)"),
-        "3": ("claude", "Claude Sonnet 4 (Most Capable)"),
+        "3": ("anthropic", "Claude 3.5 Sonnet (Most Capable)"),
     }
 
     print("\n🤖 Available AI Models:")
@@ -681,7 +681,7 @@ def show_model_options() -> str:
         choice = input("\nSelect model (1-3) or press Enter for default: ").strip()
 
         if not choice:  # Default
-            return get_model_name("gemini")
+            return get_model_name("openai")
 
         if choice in models:
             selected_model_key = models[choice][0]
@@ -691,13 +691,13 @@ def show_model_options() -> str:
         print("❌ Invalid choice. Please select 1, 2, or 3.")
 
 
-def start_chat(model: str = "gemini") -> None:
+def start_chat(model: str = "openai") -> None:
     """
     Start an interactive chat session with the email analysis agent.
     Uses data directory from settings.
 
     Args:
-        model (str): Model key to use (gemini, openai, claude).
+        model (str): Model key to use (gemini, openai, anthropic).
     """
     # Configure chat-specific logging
     setup_chat_logging()
@@ -784,7 +784,7 @@ def start_chat(model: str = "gemini") -> None:
 
 def ask_single_question(
     question: str,
-    model: str = "gemini",
+    model: str = "openai",
 ) -> str:
     """
     Ask a single question to the agent without starting interactive chat.
@@ -792,7 +792,7 @@ def ask_single_question(
 
     Args:
         question (str): The question to ask.
-        model (str): Model key to use (gemini, openai, claude).
+        model (str): Model key to use (gemini, openai, anthropic).
 
     Returns:
         str: The agent's response.

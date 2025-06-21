@@ -1,6 +1,8 @@
 # TODO: commit cursor rules, just testing for now
 .cursor/rules/
 
+# Planning and research artifacts handled by .planning/.gitignore
+
 # Application specific
 credentials.json
 token.json

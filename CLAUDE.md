@@ -104,3 +104,10 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **Rate Limiting**: Respect API rate limits and implement backoff
 - **Context**: Provide sufficient context for accurate AI responses
 - **Caching**: Cache common queries and responses when appropriate
+
+## Planning & Research Artifacts
+- **Workspace**: Use `.planning/` directory for all planning, research, and development artifacts
+- **File Naming**: Use date-prefixed format `mm-dd-yy_description.ext` (e.g., `06-21-25_analysis.md`)
+- **Purpose**: Store research findings, architecture diagrams, implementation plans, experiments, and any transient development artifacts
+- **Git Handling**: Directory contents are gitignored to keep repository clean and focused on production code
+- **Organization**: Files are self-organizing by date prefix for easy chronological sorting

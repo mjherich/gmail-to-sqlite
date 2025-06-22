@@ -17,6 +17,7 @@ from ..core.errors import ChatError
 from ..tools import EmailPatternAnalyzer
 from .tools import EnhancedSQLiteTool
 from ..ui import ChatDisplay
+from ..config import get_primary_account_config
 
 
 logger = logging.getLogger(__name__)
@@ -30,13 +31,15 @@ class CrewAIRunnable(Runnable):
         crew_agent: Agent, 
         db_path: str, 
         llm: Any,
-        display_callback: Optional[Callable] = None
+        display_callback: Optional[Callable] = None,
+        task_builder: Optional[Callable] = None
     ):
         """Initialize the runnable wrapper."""
         self.crew_agent = crew_agent
         self.db_path = db_path
         self.llm = llm
         self.display_callback = display_callback
+        self.task_builder = task_builder
         self.sqlite_tool = None
         self.pattern_analyzer = None
 
@@ -54,28 +57,11 @@ class CrewAIRunnable(Runnable):
             if not user_message:
                 return "No input provided."
 
-            # Create a task for the CrewAI agent following best practices
-            task_description = f"""
-            Current user message: {user_message}
-            
-            Instructions for Gmail Data Analysis:
-            1. Respond naturally and conversationally to the user's question
-            2. For data analysis questions, use the Enhanced SQLite Query Tool strategically
-            3. When using the SQLite tool, you can pass natural language questions or SQL queries
-            4. For pattern analysis beyond basic SQL, use the Email Pattern Analyzer tool
-            5. Always provide clear insights and context for query results
-            6. Explain what the data means and why it's interesting
-            7. Suggest follow-up questions when appropriate
-            8. Be helpful, informative, and maintain conversation context
-            
-            Your Expertise: You are a Gmail data analysis expert with deep knowledge of:
-            - Email communication patterns and trends
-            - Productivity insights from email behavior
-            - SQL optimization for email data queries
-            - Statistical analysis of communication metrics
-            
-            Response Style: Professional yet conversational, always explaining insights clearly.
-            """
+            # Create a task for the CrewAI agent with user context
+            if self.task_builder:
+                task_description = self.task_builder(user_message)
+            else:
+                task_description = f"Current user message: {user_message}"
 
             task = Task(
                 description=task_description,
@@ -142,6 +128,9 @@ class EmailAnalysisAgent:
         self.session_id = session_id or str(uuid.uuid4())
         self.display_callback = display_callback
 
+        # Load user configuration for personalization
+        self.user_config = get_primary_account_config()
+
         # Initialize persistent conversation history
         self.chat_history = self._get_session_history(self.session_id)
 
@@ -163,7 +152,110 @@ class EmailAnalysisAgent:
         self.agent = Agent(
             role="Gmail Data Analysis Specialist",
             goal="Provide deep, actionable insights about Gmail data through intelligent analysis and natural conversation, focusing on communication patterns, productivity metrics, and email behavior trends",
-            backstory=f"""You are a world-class email analytics specialist with 15+ years of experience in:
+            backstory=self._build_personalized_backstory(),
+            llm=self.llm,
+            verbose=False,
+            memory=True,  # Enhanced persistent memory
+            respect_context_window=True,  # Auto-manage context limits
+            allow_delegation=False,
+            max_rpm=30,  # Rate limiting for cost control
+            function_calling_llm=self.llm,
+            tools=[self.sqlite_tool, self.pattern_analyzer],
+        )
+
+        # Create LangChain-compatible runnable wrapper
+        self.agent_runnable = CrewAIRunnable(
+            self.agent, db_path, self.llm, display_callback, self._build_task_description
+        )
+        self.agent_runnable.set_tools(self.sqlite_tool, self.pattern_analyzer)
+
+        # Wrap with RunnableWithMessageHistory for enhanced message handling
+        self.agent_with_history = RunnableWithMessageHistory(
+            self.agent_runnable,
+            lambda session_id: self._get_session_history(session_id),
+            input_messages_key="input",
+            history_messages_key="chat_history",
+        )
+
+    def _build_task_description(self, user_message: str) -> str:
+        """Build task description with user context."""
+        if not self.user_config:
+            return self._get_generic_task_description(user_message)
+        
+        user_name = self.user_config.get("name", "User")
+        custom_instructions = self.user_config.get("custom_instructions", "")
+        
+        return f"""
+        Current user message from {user_name}: {user_message}
+        
+        User Context & Instructions:
+        - {custom_instructions}
+        
+        Instructions for Gmail Data Analysis:
+        1. Address the user as {user_name.split()[0] if user_name else "User"}
+        2. Respond according to their preferences and communication style
+        3. For data analysis questions, use the Enhanced SQLite Query Tool strategically
+        4. When using the SQLite tool, you can pass natural language questions or SQL queries
+        5. For pattern analysis beyond basic SQL, use the Email Pattern Analyzer tool
+        6. Always provide clear insights and context for query results
+        7. Explain what the data means and why it's interesting in the context of their work/situation
+        8. Suggest follow-up questions when appropriate
+        9. Be helpful, informative, and maintain conversation context
+        
+        Your Expertise: You are {user_name}'s personal Gmail data analysis expert with deep knowledge of:
+        - Email communication patterns and trends
+        - Productivity insights from email behavior  
+        - SQL optimization for email data queries
+        - Statistical analysis of communication metrics
+        
+        Response Style: Follow their preferences: {custom_instructions}
+        """
+
+    def _get_generic_task_description(self, user_message: str) -> str:
+        """Fallback generic task description."""
+        return f"""
+        Current user message: {user_message}
+        
+        Instructions for Gmail Data Analysis:
+        1. Respond naturally and conversationally to the user's question
+        2. For data analysis questions, use the Enhanced SQLite Query Tool strategically
+        3. When using the SQLite tool, you can pass natural language questions or SQL queries
+        4. For pattern analysis beyond basic SQL, use the Email Pattern Analyzer tool
+        5. Always provide clear insights and context for query results
+        6. Explain what the data means and why it's interesting
+        7. Suggest follow-up questions when appropriate
+        8. Be helpful, informative, and maintain conversation context
+        
+        Response Style: Professional yet conversational, always explaining insights clearly.
+        """
+
+    def _get_session_history(self, session_id: str) -> SQLChatMessageHistory:
+        """Get or create a SQLChatMessageHistory for the given session."""
+        connection_string = f"sqlite:///{self.db_path}"
+        return SQLChatMessageHistory(
+            session_id=session_id,
+            connection=connection_string,
+            table_name="chat_message_store",  # Different table from messages
+        )
+
+    def _build_personalized_backstory(self) -> str:
+        """Build a personalized backstory based on user configuration."""
+        if not self.user_config:
+            # Fallback to generic backstory if no user config
+            return self._get_generic_backstory()
+        
+        user_name = self.user_config.get("name", "User")
+        bio = self.user_config.get("bio", "")
+        custom_instructions = self.user_config.get("custom_instructions", "")
+        
+        backstory = f"""You are {user_name}'s personal Gmail data analysis specialist and productivity assistant.
+
+**User Context**:
+- Name: {user_name}
+- Background: {bio}
+- Preferences: {custom_instructions}
+
+**Your Expertise**: You are a world-class email analytics specialist with 15+ years of experience in:
 
 📊 **Communication Analytics**: Expert in analyzing email patterns, volume trends, response times, and interaction networks to uncover meaningful insights about digital communication behavior.
 
@@ -184,39 +276,18 @@ class EmailAnalysisAgent:
 - Use sophisticated SQL when needed, but explain insights in plain language
 - Maintain conversation continuity and build upon previous discussions
 
-**Your Communication Style**: Professional yet approachable, focusing on actionable insights rather than technical jargon. You help users understand their digital communication patterns to improve productivity and relationships.""",
-            llm=self.llm,
-            verbose=False,
-            memory=True,  # Enhanced persistent memory
-            respect_context_window=True,  # Auto-manage context limits
-            allow_delegation=False,
-            max_rpm=30,  # Rate limiting for cost control
-            function_calling_llm=self.llm,
-            tools=[self.sqlite_tool, self.pattern_analyzer],
-        )
+**Your Communication Style**: Follow the user's preferences: {custom_instructions}. Always be helpful, informative, and focused on actionable insights."""
 
-        # Create LangChain-compatible runnable wrapper
-        self.agent_runnable = CrewAIRunnable(
-            self.agent, db_path, self.llm, display_callback
-        )
-        self.agent_runnable.set_tools(self.sqlite_tool, self.pattern_analyzer)
+        return backstory
 
-        # Wrap with RunnableWithMessageHistory for enhanced message handling
-        self.agent_with_history = RunnableWithMessageHistory(
-            self.agent_runnable,
-            lambda session_id: self._get_session_history(session_id),
-            input_messages_key="input",
-            history_messages_key="chat_history",
-        )
+    def _get_generic_backstory(self) -> str:
+        """Fallback generic backstory when no user config is available."""
+        return f"""You are a world-class email analytics specialist with 15+ years of experience in communication analytics, data intelligence, and productivity consulting.
 
-    def _get_session_history(self, session_id: str) -> SQLChatMessageHistory:
-        """Get or create a SQLChatMessageHistory for the given session."""
-        connection_string = f"sqlite:///{self.db_path}"
-        return SQLChatMessageHistory(
-            session_id=session_id,
-            connection=connection_string,
-            table_name="chat_message_store",  # Different table from messages
-        )
+**Your Database Expertise**: 
+{self.db_schema}
+
+**Your Approach**: Professional yet conversational, always explaining insights clearly and providing actionable recommendations."""
 
     def _get_database_schema(self) -> str:
         """Extract the database schema for context."""

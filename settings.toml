@@ -1,6 +1,7 @@
 # Gmail to SQLite Configuration
 # This file contains the core configuration for gmail-to-sqlite
-# Note: DATA_DIR and API keys are configured in .secrets.toml for security
+# Note: DATA_DIR, API keys, and ACCOUNTS are configured in .secrets.toml for security
+
 # Application settings
 DEBUG = false
 MAX_WORKERS = 4

@@ -28,14 +28,10 @@ def _get_account_data_dir(account_name: Optional[str] = None) -> str:
     Raises:
         AuthenticationError: If no accounts are configured or account not found.
     """
-    accounts = settings.get("ACCOUNTS", [])
+    accounts = settings.get("ACCOUNT", [])
     
-    # Fallback to legacy DATA_DIR if no accounts configured
     if not accounts:
-        data_dir = settings.get("DATA_DIR")
-        if not data_dir:
-            raise AuthenticationError("Neither ACCOUNTS nor DATA_DIR configured in settings")
-        return data_dir
+        raise AuthenticationError("No [[ACCOUNT]] entries configured in .secrets.toml")
     
     # Find the specified account or use the first one
     if account_name is None:
@@ -62,10 +58,7 @@ def get_available_accounts() -> List[str]:
     Returns:
         List[str]: List of account names configured in settings.
     """
-    accounts = settings.get("ACCOUNTS", [])
-    if not accounts:
-        return ["default"]  # Fallback for legacy DATA_DIR setup
-    
+    accounts = settings.get("ACCOUNT", [])
     return [acc.get("name", "unnamed") for acc in accounts]
 
 

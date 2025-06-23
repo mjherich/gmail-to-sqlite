@@ -18,12 +18,9 @@ validators = [
     Validator("ANTHROPIC_API_KEY", must_exist=True, startswith="sk-ant-", 
               messages={"must_exist_true": "ANTHROPIC_API_KEY is required for Claude chat functionality"}),
     
-    # Legacy DATA_DIR (still supported for backward compatibility)
-    Validator("DATA_DIR", must_exist=False),
-    
-    # ACCOUNTS validation - at least one account must exist
-    Validator("ACCOUNTS", must_exist=True, is_type_of=list, len_min=1,
-              messages={"must_exist_true": "At least one ACCOUNTS entry must be defined"}),
+    # ACCOUNT validation - at least one account must exist
+    Validator("ACCOUNT", must_exist=True, is_type_of=list, len_min=1,
+              messages={"must_exist_true": "At least one [[ACCOUNT]] entry must be defined in .secrets.toml"}),
 ]
 
 settings = Dynaconf(
@@ -46,7 +43,7 @@ def get_user_config(account_name: str = "personal") -> Optional[Dict[str, Any]]:
     Returns:
         Dictionary with user configuration or None if not found
     """
-    accounts = settings.get("ACCOUNTS", [])
+    accounts = settings.get("ACCOUNT", [])
     
     for account in accounts:
         if account.get("name") == account_name:
@@ -61,17 +58,18 @@ def get_user_config(account_name: str = "personal") -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_primary_account_config() -> Optional[Dict[str, Any]]:
+def get_primary_account_config() -> Dict[str, Any]:
     """Get the primary account configuration (first account in list)."""
-    accounts = settings.get("ACCOUNTS", [])
-    if accounts:
-        account = accounts[0]
-        return {
-            "name": account.get("user_name"),
-            "email": account.get("user_email"), 
-            "bio": account.get("bio"),
-            "custom_instructions": account.get("custom_instructions"),
-            "data_dir": account.get("data_dir"),
-            "account_name": account.get("name"),
-        }
-    return None
+    accounts = settings.get("ACCOUNT", [])
+    if not accounts:
+        raise ValueError("No [[ACCOUNT]] entries configured in .secrets.toml")
+    
+    account = accounts[0]
+    return {
+        "name": account.get("user_name"),
+        "email": account.get("user_email"), 
+        "bio": account.get("bio"),
+        "custom_instructions": account.get("custom_instructions"),
+        "data_dir": account.get("data_dir"),
+        "account_name": account.get("name"),
+    }

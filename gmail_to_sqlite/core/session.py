@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 
 from ..constants import DATABASE_FILE_NAME
-from ..config import settings
+from ..config import settings, get_primary_account_config
 from ..ui import ChatDisplay
 from .models import ModelManager
 from .errors import ChatError, DatabaseError
@@ -48,9 +48,14 @@ class ChatSession:
         
     def _get_database_path(self) -> str:
         """Get the database path from configuration."""
-        data_dir = settings.get("DATA_DIR")
+        try:
+            account_config = get_primary_account_config()
+            data_dir = account_config["data_dir"]
+        except (ValueError, KeyError) as e:
+            raise ChatError(f"Account configuration error: {e}")
+        
         if not data_dir:
-            raise ChatError("DATA_DIR not configured in settings")
+            raise ChatError("data_dir not configured for primary account")
         
         db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
         

@@ -152,7 +152,7 @@ Examples:
         default="openai",
         help="AI model to use for chat (default: openai)",
     )
-    
+
     parser.add_argument(
         "--account",
         "-a",
@@ -177,9 +177,9 @@ def main() -> None:
         # Get account-specific data directory and confirm account selection
         try:
             data_dir = auth._get_account_data_dir(args.account)
-            
+
             # Show which account will be used if none was explicitly specified
-            if args.account is None and args.command != "chat":
+            if args.account is None:
                 accounts = auth.get_available_accounts()
                 if len(accounts) > 1:
                     account_name = accounts[0]
@@ -187,7 +187,7 @@ def main() -> None:
                     print(f"Available accounts: {', '.join(accounts)}")
                     print("Press Enter to continue or Ctrl+C to cancel...")
                     input()
-                
+
         except auth.AuthenticationError as e:
             parser.error(str(e))
 
@@ -212,11 +212,13 @@ def main() -> None:
                 # Chat command - either single question or interactive chat
                 if args.question:
                     # Single question mode
-                    response = chat.ask_single_question(args.question, model=args.model)
+                    response = chat.ask_single_question(
+                        args.question, model=args.model, account=args.account
+                    )
                     print(response)
                 else:
                     # Interactive chat mode
-                    chat.start_chat(model=args.model)
+                    chat.start_chat(model=args.model, account=args.account)
             elif args.command == "sync":
                 # Initialize database first
                 db.init(data_dir)

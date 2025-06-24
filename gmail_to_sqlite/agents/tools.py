@@ -49,6 +49,8 @@ class EnhancedSQLiteTool(BaseTool):
         db_path: str, 
         llm: Any = None, 
         display_callback: Optional[Callable] = None,
+        max_rows: Optional[int] = None,
+        max_field_length: Optional[int] = None,
         **kwargs: Any
     ) -> None:
         super().__init__(**kwargs)
@@ -57,6 +59,9 @@ class EnhancedSQLiteTool(BaseTool):
         self._query_cache: Dict[str, str] = {}
         self._schema_info: Optional[str] = None
         self._display_callback = display_callback
+        # Configurable limits - None means no limit
+        self._max_rows = max_rows
+        self._max_field_length = max_field_length
 
     def _run(self, query: str) -> str:
         """Execute a SQL query or convert natural language to SQL and execute it."""
@@ -320,22 +325,28 @@ class EnhancedSQLiteTool(BaseTool):
                 result_lines = [" | ".join(column_names)]
                 result_lines.append("-" * len(result_lines[0]))
 
-                for row in results[:20]:  # Limit to 20 rows for readability
+                # Apply configurable row limit
+                rows_to_show = results
+                if self._max_rows is not None:
+                    rows_to_show = results[:self._max_rows]
+
+                for row in rows_to_show:
                     formatted_row = []
                     for value in row:
                         if value is None:
                             formatted_row.append("NULL")
                         else:
                             str_value = str(value)
-                            # Truncate long values
-                            if len(str_value) > 50:
-                                str_value = str_value[:47] + "..."
+                            # Apply configurable field length limit
+                            if self._max_field_length is not None and len(str_value) > self._max_field_length:
+                                str_value = str_value[:self._max_field_length - 3] + "..."
                             formatted_row.append(str_value)
                     result_lines.append(" | ".join(formatted_row))
 
-                if len(results) > 20:
+                # Show truncation message only if we actually truncated
+                if self._max_rows is not None and len(results) > self._max_rows:
                     result_lines.append(
-                        f"... ({len(results)} total rows, showing first 20)"
+                        f"... ({len(results)} total rows, showing first {self._max_rows})"
                     )
 
                 return "\n".join(result_lines)

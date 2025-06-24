@@ -138,10 +138,13 @@ class EmailAnalysisAgent:
         self.llm = ModelManager.create_llm(model_key)
 
         # Initialize tools with display callback
+        # Use no limits for max data retrieval - let CrewAI manage context window
         self.sqlite_tool = EnhancedSQLiteTool(
             db_path=db_path, 
             llm=self.llm,
-            display_callback=display_callback
+            display_callback=display_callback,
+            max_rows=None,  # No row limit - get all results
+            max_field_length=None  # No field truncation - preserve full email content
         )
         self.pattern_analyzer = EmailPatternAnalyzer(db_path=db_path)
 

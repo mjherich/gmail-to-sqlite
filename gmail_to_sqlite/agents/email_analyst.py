@@ -27,12 +27,12 @@ class CrewAIRunnable(Runnable):
     """LangChain Runnable wrapper for CrewAI agents with UI integration."""
 
     def __init__(
-        self, 
-        crew_agent: Agent, 
-        db_path: str, 
+        self,
+        crew_agent: Agent,
+        db_path: str,
         llm: Any,
         display_callback: Optional[Callable] = None,
-        task_builder: Optional[Callable] = None
+        task_builder: Optional[Callable] = None,
     ):
         """Initialize the runnable wrapper."""
         self.crew_agent = crew_agent
@@ -83,6 +83,7 @@ class CrewAIRunnable(Runnable):
                 try:
                     if attempt > 0:
                         import time
+
                         time.sleep(2)  # Brief pause between retries
 
                     result = crew.kickoff()
@@ -140,11 +141,11 @@ class EmailAnalysisAgent:
         # Initialize tools with display callback
         # Use no limits for max data retrieval - let CrewAI manage context window
         self.sqlite_tool = EnhancedSQLiteTool(
-            db_path=db_path, 
+            db_path=db_path,
             llm=self.llm,
             display_callback=display_callback,
             max_rows=None,  # No row limit - get all results
-            max_field_length=None  # No field truncation - preserve full email content
+            max_field_length=None,  # No field truncation - preserve full email content
         )
         self.pattern_analyzer = EmailPatternAnalyzer(db_path=db_path)
 
@@ -168,7 +169,11 @@ class EmailAnalysisAgent:
 
         # Create LangChain-compatible runnable wrapper
         self.agent_runnable = CrewAIRunnable(
-            self.agent, db_path, self.llm, display_callback, self._build_task_description
+            self.agent,
+            db_path,
+            self.llm,
+            display_callback,
+            self._build_task_description,
         )
         self.agent_runnable.set_tools(self.sqlite_tool, self.pattern_analyzer)
 
@@ -184,10 +189,10 @@ class EmailAnalysisAgent:
         """Build task description with user context."""
         if not self.user_config:
             return self._get_generic_task_description(user_message)
-        
+
         user_name = self.user_config.get("name", "User")
         custom_instructions = self.user_config.get("custom_instructions", "")
-        
+
         return f"""
         Current user message from {user_name}: {user_message}
         
@@ -246,11 +251,11 @@ class EmailAnalysisAgent:
         if not self.user_config:
             # Fallback to generic backstory if no user config
             return self._get_generic_backstory()
-        
+
         user_name = self.user_config.get("name", "User")
         bio = self.user_config.get("bio", "")
         custom_instructions = self.user_config.get("custom_instructions", "")
-        
+
         backstory = f"""You are {user_name}'s personal Gmail data analysis specialist and productivity assistant.
 
 **User Context**:
@@ -307,7 +312,7 @@ class EmailAnalysisAgent:
                 table_name = table[0]
                 if table_name == "chat_message_store":
                     continue  # Skip chat history table
-                    
+
                 schema_parts.append(f"Table: {table_name}")
 
                 # Get column information

@@ -45,13 +45,13 @@ class EnhancedSQLiteTool(BaseTool):
     """
 
     def __init__(
-        self, 
-        db_path: str, 
-        llm: Any = None, 
+        self,
+        db_path: str,
+        llm: Any = None,
         display_callback: Optional[Callable] = None,
         max_rows: Optional[int] = None,
         max_field_length: Optional[int] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._db_path = db_path
@@ -72,7 +72,7 @@ class EnhancedSQLiteTool(BaseTool):
                 query_upper.startswith(cmd)
                 for cmd in ["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"]
             )
-            
+
             if is_sql:
                 sql_query = query
                 if self._display_callback:
@@ -81,19 +81,21 @@ class EnhancedSQLiteTool(BaseTool):
                 # Use intelligent SQL generation
                 if self._display_callback:
                     self._display_callback("show_processing", f"Analyzing: '{query}'")
-                    
+
                 sql_query = self._intelligent_sql_generation(query)
-                
+
                 if self._display_callback:
                     self._display_callback("show_query_execution", sql_query, True)
 
             # Execute the query
             result = self._execute_sql_query(sql_query)
-            
+
             # Show results through display callback if available
             if self._display_callback:
                 lines = result.split("\n")
-                row_count = len(lines) - 2 if len(lines) > 2 else 0  # Subtract header and separator
+                row_count = (
+                    len(lines) - 2 if len(lines) > 2 else 0
+                )  # Subtract header and separator
                 self._display_callback("show_query_results", result, row_count)
 
             return result
@@ -173,9 +175,11 @@ class EnhancedSQLiteTool(BaseTool):
 
         except Exception as e:
             if self._display_callback:
-                self._display_callback("show_warning", 
-                    f"AI SQL generation failed: {e}. Using pattern matching.", 
-                    "Fallback")
+                self._display_callback(
+                    "show_warning",
+                    f"AI SQL generation failed: {e}. Using pattern matching.",
+                    "Fallback",
+                )
             return self._fallback_pattern_matching(question)
 
     def _fallback_pattern_matching(self, question: str) -> str:
@@ -328,7 +332,7 @@ class EnhancedSQLiteTool(BaseTool):
                 # Apply configurable row limit
                 rows_to_show = results
                 if self._max_rows is not None:
-                    rows_to_show = results[:self._max_rows]
+                    rows_to_show = results[: self._max_rows]
 
                 for row in rows_to_show:
                     formatted_row = []
@@ -338,8 +342,13 @@ class EnhancedSQLiteTool(BaseTool):
                         else:
                             str_value = str(value)
                             # Apply configurable field length limit
-                            if self._max_field_length is not None and len(str_value) > self._max_field_length:
-                                str_value = str_value[:self._max_field_length - 3] + "..."
+                            if (
+                                self._max_field_length is not None
+                                and len(str_value) > self._max_field_length
+                            ):
+                                str_value = (
+                                    str_value[: self._max_field_length - 3] + "..."
+                                )
                             formatted_row.append(str_value)
                     result_lines.append(" | ".join(formatted_row))
 

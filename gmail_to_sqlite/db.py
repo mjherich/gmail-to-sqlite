@@ -87,7 +87,9 @@ class Message(Model):
         db_table = "messages"
 
 
-def init(data_dir: Optional[str] = None, enable_logging: bool = False) -> SqliteDatabase:
+def init(
+    data_dir: Optional[str] = None, enable_logging: bool = False
+) -> SqliteDatabase:
     """
     Initialize the database using specified or configured data directory.
 
@@ -106,7 +108,7 @@ def init(data_dir: Optional[str] = None, enable_logging: bool = False) -> Sqlite
             data_dir = settings.get("DATA_DIR")
             if not data_dir:
                 raise DatabaseError("DATA_DIR not configured in settings")
-        
+
         db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
         db = SqliteDatabase(db_path)
         database_proxy.initialize(db)

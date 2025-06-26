@@ -4,6 +4,7 @@ from typing import Any, List, Optional
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.exceptions import RefreshError
 
 from .constants import GMAIL_SCOPES, OAUTH2_CREDENTIALS_FILE, TOKEN_FILE_NAME
 from .config import settings
@@ -18,43 +19,47 @@ class AuthenticationError(Exception):
 def _get_account_data_dir(account_name: Optional[str] = None) -> str:
     """
     Get the data directory for a specific account.
-    
+
     Args:
         account_name: Name of the account. If None, uses the first account.
-        
+
     Returns:
         str: The data directory path for the account.
-        
+
     Raises:
         AuthenticationError: If no accounts are configured or account not found.
     """
     accounts = settings.get("ACCOUNT", [])
-    
+
     if not accounts:
         raise AuthenticationError("No [[ACCOUNT]] entries configured in .secrets.toml")
-    
+
     # Find the specified account or use the first one
     if account_name is None:
         account = accounts[0]
     else:
-        account = next((acc for acc in accounts if acc.get("name") == account_name), None)
+        account = next(
+            (acc for acc in accounts if acc.get("name") == account_name), None
+        )
         if account is None:
             available_accounts = [acc.get("name") for acc in accounts]
             raise AuthenticationError(
                 f"Account '{account_name}' not found. Available accounts: {available_accounts}"
             )
-    
+
     data_dir = account.get("data_dir")
     if not data_dir:
-        raise AuthenticationError(f"Account '{account.get('name')}' missing data_dir configuration")
-    
+        raise AuthenticationError(
+            f"Account '{account.get('name')}' missing data_dir configuration"
+        )
+
     return data_dir
 
 
 def get_available_accounts() -> List[str]:
     """
     Get list of available account names.
-    
+
     Returns:
         List[str]: List of account names configured in settings.
     """
@@ -64,7 +69,7 @@ def get_available_accounts() -> List[str]:
 
 def get_credentials(account_name: Optional[str] = None) -> Any:
     """
-    Retrieves the authentication credentials by either loading them from the token file 
+    Retrieves the authentication credentials by either loading them from the token file
     or by running the authentication flow. Uses account-specific data directory.
 
     Args:
@@ -105,9 +110,46 @@ def get_credentials(account_name: Optional[str] = None) -> Any:
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
+            except RefreshError as e:
+                # Check if this is a token expiration/revocation error
+                error_msg = str(e).lower()
+                if (
+                    "invalid_grant" in error_msg
+                    or "expired" in error_msg
+                    or "revoked" in error_msg
+                ):
+                    # Prompt user for re-authentication
+                    account_display = account_name or "default"
+                    print(
+                        f"\n⚠️  Authentication token has expired for account '{account_display}'."
+                    )
+                    response = (
+                        input("Would you like to re-authenticate? (y/N): ")
+                        .strip()
+                        .lower()
+                    )
+
+                    if response in ["y", "yes"]:
+                        # Delete the expired token file
+                        if os.path.exists(token_file_path):
+                            os.remove(token_file_path)
+                            print(
+                                f"✓ Removed expired token for account '{account_display}'"
+                            )
+
+                        # Start fresh authentication flow
+                        creds = None
+                    else:
+                        raise AuthenticationError(
+                            f"Authentication required for account '{account_display}'. Run the command again and choose 'y' to re-authenticate."
+                        )
+                else:
+                    raise AuthenticationError(f"Failed to refresh credentials: {e}")
             except Exception as e:
                 raise AuthenticationError(f"Failed to refresh credentials: {e}")
-        else:
+
+        # If we don't have valid credentials, start the OAuth flow
+        if not creds or not creds.valid:
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     credentials_file_path, GMAIL_SCOPES

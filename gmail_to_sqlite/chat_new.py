@@ -6,7 +6,7 @@ ongoing conversations with specialized AI agents for analyzing Gmail data.
 
 Features:
 - Beautiful terminal UI using Rich library
-- Modular agent architecture following CrewAI best practices 
+- Modular agent architecture following CrewAI best practices
 - Enhanced error handling and user feedback
 - Persistent conversation memory
 - Multiple AI model support (Gemini, OpenAI, Claude)
@@ -32,7 +32,7 @@ def setup_chat_logging() -> None:
 def start_chat(model: str = "openai", session_id: Optional[str] = None) -> None:
     """
     Start an interactive chat session with beautiful UI.
-    
+
     Args:
         model (str): Model key to use (gemini, openai, anthropic).
         session_id (str, optional): Session ID for persistent conversation history.
@@ -47,17 +47,17 @@ def start_chat(model: str = "openai", session_id: Optional[str] = None) -> None:
 
 def ask_single_question(
     question: str,
-    model: str = "openai", 
+    model: str = "openai",
     session_id: Optional[str] = None,
 ) -> str:
     """
     Ask a single question to the agent without starting interactive chat.
-    
+
     Args:
         question (str): The question to ask.
         model (str): Model key to use (gemini, openai, anthropic).
         session_id (str, optional): Session ID for persistent conversation history.
-        
+
     Returns:
         str: The agent's response.
     """
@@ -72,6 +72,7 @@ def ask_single_question(
 def get_model_name(model_key: str) -> str:
     """Get the full model name from a simple key (backward compatibility)."""
     from .core.models import ModelManager
+
     try:
         config = ModelManager.get_model_config(model_key)
         return config.full_identifier
@@ -83,7 +84,7 @@ def show_model_options() -> str:
     """Display available models and let user choose (backward compatibility)."""
     from .ui import ChatDisplay
     from .core.models import ModelManager
-    
+
     display = ChatDisplay()
     return display.show_model_selection(ModelManager.MODEL_SELECTION)
 
@@ -91,13 +92,13 @@ def show_model_options() -> str:
 # Legacy exports for backward compatibility
 MODEL_MAP = {
     "gemini": "gemini/gemini-2.0-flash-exp",
-    "openai": "openai/gpt-4.1", 
+    "openai": "openai/gpt-4.1",
     "anthropic": "anthropic/claude-3-5-sonnet-20241022",
 }
 
 MODEL_DESCRIPTIONS = {
     "gemini": "Gemini 2.0 Flash Exp (Latest & Advanced)",
-    "openai": "OpenAI GPT-4.1 (Latest & Most Capable)", 
+    "openai": "OpenAI GPT-4.1 (Latest & Most Capable)",
     "anthropic": "Claude 3.5 Sonnet (Most Capable)",
 }
 

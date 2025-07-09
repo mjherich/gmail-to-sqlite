@@ -15,12 +15,11 @@ class EnhancedSQLiteTool(BaseTool):
     description: str = """
     Execute intelligent SQL queries against a SQLite database containing Gmail messages.
     
-    This tool can:
-    1. Convert complex natural language questions to optimized SQL queries using AI
-    2. Handle advanced queries with JOINs, subqueries, and complex aggregations
-    3. Provide query optimization and validation
-    4. Return formatted results with insights
-    5. Cache common queries for better performance
+    This tool helps answer questions about Gmail data by:
+    1. Converting natural language questions to optimized SQL queries using AI
+    2. Handling queries about labels, senders, dates, and message content
+    3. Providing formatted results with clear insights
+    4. Supporting complex analysis with JOINs and aggregations
     
     The database contains a 'messages' table with these columns:
     - message_id: Unique Gmail message ID  
@@ -37,11 +36,13 @@ class EnhancedSQLiteTool(BaseTool):
     - is_deleted: Boolean if deleted from Gmail
     - last_indexed: When message was last synced
     
-    Can handle complex queries like:
-    - "Compare my email volume between 2023 and 2024 by month"
-    - "Find email threads with the most participants"
-    - "Show me the response time patterns for different contacts"
-    - "Analyze my email activity by day of week and hour"
+    Common queries you can help with:
+    - "Show me emails with the Action Item label"
+    - "Who sends me the most emails?"
+    - "How many unread emails do I have?"
+    - "What emails did I receive yesterday?"
+    - "Find emails from John about the project"
+    - "Show me my longest email threads"
     """
 
     def __init__(
@@ -193,8 +194,74 @@ class EnhancedSQLiteTool(BaseTool):
                 year_filter = f" AND strftime('%Y', timestamp) = '{year}'"
                 break
 
+        # Pattern matching for different types of queries
+
+        # Label queries (e.g., "Action Item", "Important", etc.)
+        if "label" in question_lower or any(
+            word in question_lower for word in ["with", "having", "tagged"]
+        ):
+            # Extract label name from the question more generically
+            label_name = None
+
+            # Try to extract quoted label names first
+            import re
+
+            quoted_match = re.search(r'["\'`]([^"\'`]+)["\'`]', question_lower)
+            if quoted_match:
+                label_name = quoted_match.group(1)
+            else:
+                # Look for common patterns like "with the X label" or "labeled as X"
+                patterns = [
+                    r"with\s+the\s+([^,\s]+(?:\s+[^,\s]+)*)\s+label",
+                    r"labeled?\s+(?:as\s+)?([^,\s]+(?:\s+[^,\s]+)*)",
+                    r"having\s+(?:the\s+)?([^,\s]+(?:\s+[^,\s]+)*)\s+label",
+                    r"tagged\s+(?:as\s+)?([^,\s]+(?:\s+[^,\s]+)*)",
+                ]
+
+                for pattern in patterns:
+                    match = re.search(pattern, question_lower)
+                    if match:
+                        label_name = match.group(1).strip()
+                        break
+
+                # If no specific pattern found, look for common Gmail labels
+                if not label_name:
+                    common_labels = [
+                        "inbox",
+                        "sent",
+                        "draft",
+                        "spam",
+                        "trash",
+                        "important",
+                        "starred",
+                        "unread",
+                    ]
+                    for label in common_labels:
+                        if label in question_lower:
+                            label_name = label
+                            break
+
+            # If we found a label name, use it in the query
+            if label_name:
+                # Clean up the label name (capitalize appropriately)
+                label_name = " ".join(word.capitalize() for word in label_name.split())
+
+                return f"""
+                SELECT subject,
+                       sender->>'$.email' as sender,
+                       sender->>'$.name' as sender_name,
+                       timestamp,
+                       is_read,
+                       is_outgoing,
+                       labels
+                FROM messages 
+                WHERE json_extract(labels, '$') LIKE '%{label_name}%'{year_filter}
+                ORDER BY timestamp DESC
+                LIMIT 50
+                """
+
         # Enhanced pattern matching with more sophisticated queries
-        if ("compare" in question_lower and "volume" in question_lower) or (
+        elif ("compare" in question_lower and "volume" in question_lower) or (
             "by month" in question_lower
         ):
             return f"""

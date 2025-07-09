@@ -14,12 +14,11 @@ dependencies = [
     "google-auth-httplib2>=0.2.0",
     "peewee>=3.15.0",
     "python-dotenv>=1.0.1",
-    "crewai[tools]>=0.1.7",
     "dynaconf>=3.2.11",
-    "crewai-tools>=0.47.1",
     "langchain-core (>=0.3.66,<0.4.0)",
     "langchain-community (>=0.3.26,<0.4.0)",
     "rich>=13.9.4",
+    "crewai[tools]>=0.141.0",
 ]
 
 [project.optional-dependencies]

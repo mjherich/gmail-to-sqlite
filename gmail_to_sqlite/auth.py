@@ -118,31 +118,21 @@ def get_credentials(account_name: Optional[str] = None) -> Any:
                     or "expired" in error_msg
                     or "revoked" in error_msg
                 ):
-                    # Prompt user for re-authentication
+                    # Automatically start re-authentication flow
                     account_display = account_name or "default"
                     print(
-                        f"\n⚠️  Authentication token has expired for account '{account_display}'."
+                        f"\n⚠️  Authentication token has expired for account '{account_display}', starting automatic re-authentication..."
                     )
-                    response = (
-                        input("Would you like to re-authenticate? (y/N): ")
-                        .strip()
-                        .lower()
-                    )
-
-                    if response in ["y", "yes"]:
-                        # Delete the expired token file
-                        if os.path.exists(token_file_path):
-                            os.remove(token_file_path)
-                            print(
-                                f"✓ Removed expired token for account '{account_display}'"
-                            )
-
-                        # Start fresh authentication flow
-                        creds = None
-                    else:
-                        raise AuthenticationError(
-                            f"Authentication required for account '{account_display}'. Run the command again and choose 'y' to re-authenticate."
+                    
+                    # Delete the expired token file
+                    if os.path.exists(token_file_path):
+                        os.remove(token_file_path)
+                        print(
+                            f"✓ Removed expired token for account '{account_display}'"
                         )
+
+                    # Start fresh authentication flow
+                    creds = None
                 else:
                     raise AuthenticationError(f"Failed to refresh credentials: {e}")
             except Exception as e:
@@ -166,6 +156,10 @@ def get_credentials(account_name: Optional[str] = None) -> Any:
             try:
                 with open(token_file_path, "w") as token:
                     token.write(creds.to_json())
+                
+                # Log successful re-authentication if this was a refresh flow
+                account_display = account_name or "default"
+                print(f"✓ Re-authentication successful for account '{account_display}'")
             except Exception as e:
                 raise AuthenticationError(f"Failed to save credentials: {e}")
 

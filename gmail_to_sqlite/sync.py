@@ -409,6 +409,207 @@ def all_messages(
         pass
 
 
+def validate_label_exists(service: Any, label_name: str) -> bool:
+    """
+    Check if a label exists in the user's Gmail account.
+
+    Args:
+        service: The Gmail API service object.
+        label_name: The name of the label to check.
+
+    Returns:
+        bool: True if the label exists, False otherwise.
+
+    Raises:
+        SyncError: If label validation fails due to API error.
+    """
+    try:
+        labels = get_labels(service)
+        return label_name in labels.values()
+    except Exception as e:
+        raise SyncError(f"Failed to validate label '{label_name}': {e}")
+
+
+def format_gmail_label_query(label: str) -> str:
+    """
+    Format a label name for use in Gmail API queries.
+    Handles labels with spaces and special characters.
+
+    Args:
+        label: The label name to format.
+
+    Returns:
+        str: The formatted query string.
+    """
+    # If label contains spaces or special characters, wrap in quotes
+    if " " in label or any(
+        char in label for char in ["/", "(", ")", "[", "]", "<", ">", "@"]
+    ):
+        return f'label:"{label}"'
+    else:
+        return f"label:{label}"
+
+
+def sync_messages_with_label(
+    credentials: Any,
+    label: str,
+    full_sync: bool = False,
+    num_workers: int = 4,
+    check_shutdown: Optional[Callable[[], bool]] = None,
+) -> int:
+    """
+    Syncs messages that have a specific label from Gmail.
+
+    Args:
+        credentials: The credentials used to authenticate the Gmail API.
+        label: The label name to sync messages for.
+        full_sync: If True, syncs all messages with the label and detects removals.
+                  If False, only syncs new messages added to the label.
+        num_workers: Number of worker threads for parallel fetching.
+        check_shutdown: Callback that returns True if shutdown is requested.
+
+    Returns:
+        int: Number of messages successfully synced.
+
+    Raises:
+        SyncError: If sync fails due to API or validation errors.
+    """
+    try:
+        # Create service and validate label exists
+        service = _create_service(credentials)
+
+        if not validate_label_exists(service, label):
+            raise SyncError(f"Label '{label}' does not exist in Gmail account")
+
+        logging.info(f"Starting label sync for '{label}' (full_sync={full_sync})")
+
+        # Get existing messages with this label from database
+        db_message_ids = set(db.get_message_ids_by_label(label))
+        logging.info(
+            f"Found {len(db_message_ids)} messages with label '{label}' in database"
+        )
+
+        # Get messages with this label from Gmail
+        formatted_query = format_gmail_label_query(label)
+        query = [formatted_query]
+
+        if not full_sync:
+            # For incremental sync, add timestamp filter
+            last = db.last_indexed()
+            if last:
+                query.append(f"after:{int(last.timestamp())}")
+
+        gmail_message_ids = get_message_ids_from_gmail(service, query, check_shutdown)
+
+        if check_shutdown and check_shutdown():
+            logging.info("Shutdown requested during Gmail message collection.")
+            return 0
+
+        gmail_ids_set = set(gmail_message_ids)
+        logging.info(
+            f"Found {len(gmail_ids_set)} messages with label '{label}' in Gmail"
+        )
+
+        # Determine which messages need to be synced
+        if full_sync:
+            # Full sync: sync all Gmail messages, detect database messages that lost the label
+            messages_to_sync = list(gmail_ids_set)
+
+            # Find messages in DB that no longer have the label in Gmail
+            removed_from_label = db_message_ids - gmail_ids_set
+            if removed_from_label:
+                logging.info(
+                    f"Found {len(removed_from_label)} messages that may have lost the '{label}' label"
+                )
+                # Note: We would need to re-sync these messages to update their labels
+                # For now, we'll just log this information
+        else:
+            # Incremental sync: only sync messages not already in database
+            messages_to_sync = list(gmail_ids_set - db_message_ids)
+
+        logging.info(f"Need to sync {len(messages_to_sync)} messages")
+
+        if not messages_to_sync:
+            logging.info("No new messages to sync")
+            return 0
+
+        # Use the existing sync infrastructure to sync the identified messages
+        labels = get_labels(service)
+        total_synced_count = 0
+        processed_count = 0
+
+        def thread_worker(message_id: str) -> bool:
+            if check_shutdown and check_shutdown():
+                return False
+
+            thread_service = _create_service(credentials)
+
+            try:
+                msg = _fetch_message(
+                    thread_service,
+                    message_id,
+                    labels,
+                    check_interrupt=check_shutdown,
+                )
+                try:
+                    db.create_message(msg)
+                    logging.info(f"Successfully synced message {msg.id}")
+                    return True
+                except Exception as e:
+                    logging.error(f"Could not save message {message_id}: {str(e)}")
+                    return False
+            except InterruptedError:
+                logging.info(f"Message fetch for {message_id} was interrupted")
+                return False
+            except Exception as e:
+                logging.error(f"Failed to fetch message {message_id}: {str(e)}")
+                return False
+
+        # Use thread pool to sync messages in parallel
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_id = {
+                executor.submit(thread_worker, msg_id): msg_id
+                for msg_id in messages_to_sync
+            }
+
+            for future in concurrent.futures.as_completed(future_to_id):
+                if check_shutdown and check_shutdown() and not future.running():
+                    continue
+
+                message_id = future_to_id[future]
+                processed_count += 1
+
+                try:
+                    if not future.cancelled() and future.result():
+                        total_synced_count += 1
+
+                    if processed_count % 10 == 0 or processed_count == len(
+                        messages_to_sync
+                    ):
+                        logging.info(
+                            f"Processed {processed_count}/{len(messages_to_sync)} messages..."
+                        )
+
+                except concurrent.futures.CancelledError:
+                    logging.info(f"Task for message {message_id} was cancelled")
+                except Exception as exc:
+                    logging.error(f"Message {message_id} generated exception: {exc}")
+
+        if check_shutdown and check_shutdown():
+            logging.info("Label sync was interrupted. Partial results saved.")
+        else:
+            logging.info(
+                f"Label sync complete. {total_synced_count} messages synced for label '{label}'"
+            )
+
+        return total_synced_count
+
+    except Exception as e:
+        raise SyncError(f"Failed to sync messages with label '{label}': {e}")
+
+
 def sync_deleted_messages(
     credentials: Any, check_shutdown: Optional[Callable[[], bool]] = None
 ) -> None:

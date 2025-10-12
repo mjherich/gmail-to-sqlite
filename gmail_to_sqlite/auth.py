@@ -123,7 +123,7 @@ def get_credentials(account_name: Optional[str] = None) -> Any:
                     print(
                         f"\n⚠️  Authentication token has expired for account '{account_display}', starting automatic re-authentication..."
                     )
-                    
+
                     # Delete the expired token file
                     if os.path.exists(token_file_path):
                         os.remove(token_file_path)
@@ -156,7 +156,7 @@ def get_credentials(account_name: Optional[str] = None) -> Any:
             try:
                 with open(token_file_path, "w") as token:
                     token.write(creds.to_json())
-                
+
                 # Log successful re-authentication if this was a refresh flow
                 account_display = account_name or "default"
                 print(f"✓ Re-authentication successful for account '{account_display}'")

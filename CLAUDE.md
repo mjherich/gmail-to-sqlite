@@ -2,6 +2,8 @@
 
 ## Bash Commands
 - `uv run gmail-to-sqlite sync`: Sync Gmail messages to database
+- `uv run gmail-to-sqlite sync-label --label "Label Name"`: Sync messages with specific label
+- `uv run gmail-to-sqlite sync-label --label "Waiting" --full-sync`: Full sync of label (detect removals)
 - `uv run gmail-to-sqlite chat --model claude`: Start AI chat with Claude
 - `uv run gmail-to-sqlite chat --model openai`: Start AI chat with OpenAI
 - `uv run gmail-to-sqlite chat --model gemini`: Start AI chat with Gemini

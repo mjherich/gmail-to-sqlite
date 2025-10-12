@@ -43,19 +43,21 @@ class APIError(ChatError):
 
 class ErrorHandler:
     """Centralized error handling for consistent user experience."""
-    
+
     @staticmethod
     def handle_api_error(error: Exception) -> str:
         """Handle API-related errors with user-friendly messages."""
         error_type = type(error).__name__
-        
+
         if "RateLimitError" in error_type:
             return (
                 "⏳ Rate limit reached. Please wait a moment and try again.\n"
                 "This can happen when making too many requests too quickly."
             )
         elif "AuthenticationError" in error_type:
-            return "🔐 Authentication failed. Please check your API keys in .secrets.toml"
+            return (
+                "🔐 Authentication failed. Please check your API keys in .secrets.toml"
+            )
         elif "NotFoundError" in error_type:
             return (
                 "🔍 Model not found or not available. Try switching to a different model.\n"
@@ -73,12 +75,12 @@ class ErrorHandler:
             )
         else:
             return f"❌ Error: {error}"
-    
+
     @staticmethod
     def handle_database_error(error: Exception) -> str:
         """Handle database-related errors."""
         error_str = str(error)
-        
+
         if "no such table" in error_str.lower():
             return (
                 "📂 Database table not found. Please sync your Gmail data first.\n"
@@ -96,12 +98,12 @@ class ErrorHandler:
             )
         else:
             return f"💾 Database error: {error}"
-    
+
     @staticmethod
     def handle_configuration_error(error: Exception) -> str:
         """Handle configuration-related errors."""
         error_str = str(error)
-        
+
         if "api_key" in error_str.lower() or "key" in error_str.lower():
             return (
                 "🔑 API key configuration error. Please check your .secrets.toml file.\n"

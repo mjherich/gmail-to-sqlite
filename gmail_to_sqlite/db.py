@@ -264,3 +264,62 @@ def get_deleted_message_ids() -> List[str]:
         ]
     except Exception as e:
         raise DatabaseError(f"Failed to retrieve deleted message IDs: {e}")
+
+
+def get_message_ids_by_label(label: str) -> List[str]:
+    """
+    Returns all message IDs that have the specified label.
+
+    Args:
+        label (str): The label name to search for.
+
+    Returns:
+        List[str]: List of message IDs that have the specified label.
+
+    Raises:
+        DatabaseError: If the query fails.
+    """
+    try:
+        # Use raw SQL to query JSON array for the label
+        # SQLite JSON functions work better for this case
+        query = """
+        SELECT message_id FROM messages 
+        WHERE json_extract(labels, '$') LIKE ? 
+        AND is_deleted = 0
+        """
+        # Use LIKE with wildcards to match the label within the JSON array
+        like_pattern = f'%"{label}"%'
+
+        cursor = database_proxy.execute_sql(query, [like_pattern])
+        return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        raise DatabaseError(f"Failed to retrieve message IDs for label '{label}': {e}")
+
+
+def get_thread_ids_by_label(label: str) -> List[str]:
+    """
+    Returns all unique thread IDs that have messages with the specified label.
+
+    Args:
+        label (str): The label name to search for.
+
+    Returns:
+        List[str]: List of unique thread IDs that contain messages with the specified label.
+
+    Raises:
+        DatabaseError: If the query fails.
+    """
+    try:
+        # Use raw SQL to query JSON array for the label
+        query = """
+        SELECT DISTINCT thread_id FROM messages 
+        WHERE json_extract(labels, '$') LIKE ? 
+        AND is_deleted = 0
+        """
+        # Use LIKE with wildcards to match the label within the JSON array
+        like_pattern = f'%"{label}"%'
+
+        cursor = database_proxy.execute_sql(query, [like_pattern])
+        return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        raise DatabaseError(f"Failed to retrieve thread IDs for label '{label}': {e}")

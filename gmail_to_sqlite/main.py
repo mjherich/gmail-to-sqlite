@@ -96,6 +96,7 @@ Commands:
   sync                     Sync all messages (incremental by default)
   sync-message             Sync a single message by ID
   sync-deleted-messages    Detect and mark deleted messages
+  sync-label               Sync messages with a specific label
   chat                     Interactive chat with Gmail analysis agent or ask single question
 
 Configuration:
@@ -106,6 +107,8 @@ Examples:
   %(prog)s sync --account work
   %(prog)s sync --full-sync --account personal
   %(prog)s sync-message --message-id abc123 --account work
+  %(prog)s sync-label --label "Important" --account work
+  %(prog)s sync-label --label "Waiting" --full-sync
   %(prog)s chat --question "Who sent me the most emails?"
   %(prog)s chat --model openai
   %(prog)s chat -m anthropic
@@ -115,7 +118,7 @@ Examples:
 
     parser.add_argument(
         "command",
-        choices=["sync", "sync-message", "sync-deleted-messages", "chat"],
+        choices=["sync", "sync-message", "sync-deleted-messages", "sync-label", "chat"],
         help="The command to run",
     )
 
@@ -127,6 +130,10 @@ Examples:
     parser.add_argument(
         "--message-id",
         help="The ID of the message to sync (required for sync-message command)",
+    )
+    parser.add_argument(
+        "--label",
+        help="The label name to sync (required for sync-label command)",
     )
     parser.add_argument(
         "--question",
@@ -173,6 +180,8 @@ def main() -> None:
         # Validate command-specific arguments
         if args.command == "sync-message" and not args.message_id:
             parser.error("--message-id is required for sync-message command")
+        if args.command == "sync-label" and not args.label:
+            parser.error("--label is required for sync-label command")
 
         # Get account-specific data directory and confirm account selection
         try:
@@ -255,6 +264,24 @@ def main() -> None:
                         credentials, check_shutdown
                     )
                     print(f"Marked {deleted_count} messages as deleted")
+                except sync.SyncError as e:
+                    logging.error(f"Sync error: {e}")
+                    sys.exit(1)
+
+            elif args.command == "sync-label":
+                # Initialize database first
+                db.init(data_dir)
+
+                try:
+                    sync_count = sync.sync_messages_with_label(
+                        credentials,
+                        args.label,
+                        args.full_sync,
+                        args.workers,
+                        check_shutdown,
+                    )
+                    print(f"Label sync completed successfully!")
+                    print(f"Messages synced for label '{args.label}': {sync_count}")
                 except sync.SyncError as e:
                     logging.error(f"Sync error: {e}")
                     sys.exit(1)

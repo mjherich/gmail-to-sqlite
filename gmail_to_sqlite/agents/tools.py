@@ -13,36 +13,13 @@ class EnhancedSQLiteTool(BaseTool):
 
     name: str = "Enhanced SQLite Query Tool"
     description: str = """
-    Execute intelligent SQL queries against a SQLite database containing Gmail messages.
+    Execute SQL queries against a SQLite database containing email messages.
     
-    This tool helps answer questions about Gmail data by:
-    1. Converting natural language questions to optimized SQL queries using AI
-    2. Handling queries about labels, senders, dates, and message content
-    3. Providing formatted results with clear insights
-    4. Supporting complex analysis with JOINs and aggregations
+    This tool converts natural language questions to SQL queries using AI and executes them.
+    It handles queries about senders, dates, message content, and database analysis.
     
-    The database contains a 'messages' table with these columns:
-    - message_id: Unique Gmail message ID  
-    - thread_id: Gmail thread ID
-    - sender: JSON with sender name and email
-    - recipients: JSON with to/cc/bcc recipients
-    - labels: JSON array of Gmail labels
-    - subject: Email subject line
-    - body: Email body content (plain text)
-    - size: Message size in bytes
-    - timestamp: When the message was sent/received
-    - is_read: Boolean if message is read
-    - is_outgoing: Boolean if sent by user
-    - is_deleted: Boolean if deleted from Gmail
-    - last_indexed: When message was last synced
-    
-    Common queries you can help with:
-    - "Show me emails with the Action Item label"
-    - "Who sends me the most emails?"
-    - "How many unread emails do I have?"
-    - "What emails did I receive yesterday?"
-    - "Find emails from John about the project"
-    - "Show me my longest email threads"
+    The database contains a 'messages' table with columns for message metadata,
+    sender/recipient information, timestamps, and content.
     """
 
     def __init__(
@@ -139,7 +116,7 @@ class EnhancedSQLiteTool(BaseTool):
     def _intelligent_sql_generation(self, question: str) -> str:
         """Use AI to generate SQL queries from natural language."""
         if self._llm is None:
-            return self._fallback_pattern_matching(question)
+            return self._simple_fallback_query()
 
         try:
             schema_context = self._get_schema_info()
@@ -178,197 +155,19 @@ class EnhancedSQLiteTool(BaseTool):
             if self._display_callback:
                 self._display_callback(
                     "show_warning",
-                    f"AI SQL generation failed: {e}. Using pattern matching.",
+                    f"AI SQL generation failed: {e}. Using simple fallback.",
                     "Fallback",
                 )
-            return self._fallback_pattern_matching(question)
+            return self._simple_fallback_query()
 
-    def _fallback_pattern_matching(self, question: str) -> str:
-        """Fallback pattern-matching approach for SQL generation."""
-        question_lower = question.lower()
-
-        # Extract year filters if present
-        year_filter = ""
-        for year in range(2000, 2030):
-            if str(year) in question_lower:
-                year_filter = f" AND strftime('%Y', timestamp) = '{year}'"
-                break
-
-        # Pattern matching for different types of queries
-
-        # Label queries (e.g., "Action Item", "Important", etc.)
-        if "label" in question_lower or any(
-            word in question_lower for word in ["with", "having", "tagged"]
-        ):
-            # Extract label name from the question more generically
-            label_name = None
-
-            # Try to extract quoted label names first
-            import re
-
-            quoted_match = re.search(r'["\'`]([^"\'`]+)["\'`]', question_lower)
-            if quoted_match:
-                label_name = quoted_match.group(1)
-            else:
-                # Look for common patterns like "with the X label" or "labeled as X"
-                patterns = [
-                    r"with\s+the\s+([^,\s]+(?:\s+[^,\s]+)*)\s+label",
-                    r"labeled?\s+(?:as\s+)?([^,\s]+(?:\s+[^,\s]+)*)",
-                    r"having\s+(?:the\s+)?([^,\s]+(?:\s+[^,\s]+)*)\s+label",
-                    r"tagged\s+(?:as\s+)?([^,\s]+(?:\s+[^,\s]+)*)",
-                ]
-
-                for pattern in patterns:
-                    match = re.search(pattern, question_lower)
-                    if match:
-                        label_name = match.group(1).strip()
-                        break
-
-                # If no specific pattern found, look for common Gmail labels
-                if not label_name:
-                    common_labels = [
-                        "inbox",
-                        "sent",
-                        "draft",
-                        "spam",
-                        "trash",
-                        "important",
-                        "starred",
-                        "unread",
-                    ]
-                    for label in common_labels:
-                        if label in question_lower:
-                            label_name = label
-                            break
-
-            # If we found a label name, use it in the query
-            if label_name:
-                # Clean up the label name (capitalize appropriately)
-                label_name = " ".join(word.capitalize() for word in label_name.split())
-
-                return f"""
-                SELECT subject,
-                       sender->>'$.email' as sender,
-                       sender->>'$.name' as sender_name,
-                       timestamp,
-                       is_read,
-                       is_outgoing,
-                       labels
-                FROM messages 
-                WHERE json_extract(labels, '$') LIKE '%{label_name}%'{year_filter}
-                ORDER BY timestamp DESC
-                LIMIT 50
-                """
-
-        # Enhanced pattern matching with more sophisticated queries
-        elif ("compare" in question_lower and "volume" in question_lower) or (
-            "by month" in question_lower
-        ):
-            return f"""
-            SELECT strftime('%Y-%m', timestamp) as month,
-                   COUNT(*) as email_count,
-                   AVG(size) as avg_size
-            FROM messages 
-            WHERE 1=1{year_filter}
-            GROUP BY strftime('%Y-%m', timestamp)
-            ORDER BY month DESC
-            LIMIT 24
-            """
-
-        elif "thread" in question_lower and (
-            "participants" in question_lower or "people" in question_lower
-        ):
-            return f"""
-            SELECT thread_id,
-                   COUNT(*) as message_count,
-                   COUNT(DISTINCT sender->>'$.email') as unique_senders,
-                   MIN(timestamp) as thread_start,
-                   MAX(timestamp) as thread_end
-            FROM messages 
-            WHERE 1=1{year_filter}
-            GROUP BY thread_id
-            HAVING message_count > 1
-            ORDER BY unique_senders DESC, message_count DESC
-            LIMIT 10
-            """
-
-        elif "response time" in question_lower or "reply time" in question_lower:
-            return f"""
-            SELECT sender->>'$.email' as contact,
-                   AVG(julianday(timestamp) - julianday(LAG(timestamp) OVER (ORDER BY timestamp))) * 24 * 60 as avg_response_minutes,
-                   COUNT(*) as email_count
-            FROM messages 
-            WHERE is_outgoing = 0{year_filter}
-            GROUP BY sender->>'$.email'
-            HAVING email_count > 5
-            ORDER BY avg_response_minutes ASC
-            LIMIT 10
-            """
-
-        elif "day of week" in question_lower or "hour" in question_lower:
-            return f"""
-            SELECT strftime('%w', timestamp) as day_of_week,
-                   strftime('%H', timestamp) as hour,
-                   COUNT(*) as email_count
-            FROM messages 
-            WHERE 1=1{year_filter}
-            GROUP BY day_of_week, hour
-            ORDER BY email_count DESC
-            LIMIT 20
-            """
-
-        # Original patterns (enhanced)
-        elif (
-            "who sends me the most emails" in question_lower
-            or "top senders" in question_lower
-        ):
-            return f"""
-            SELECT sender->>'$.email' as sender_email, 
-                   sender->>'$.name' as sender_name,
-                   COUNT(*) as email_count,
-                   MAX(timestamp) as last_email
-            FROM messages 
-            WHERE is_outgoing = 0{year_filter}
-            GROUP BY sender->>'$.email', sender->>'$.name'
-            ORDER BY email_count DESC 
-            LIMIT 15
-            """
-
-        elif "unread" in question_lower:
-            return f"""
-            SELECT COUNT(*) as unread_count,
-                   COUNT(CASE WHEN is_outgoing = 0 THEN 1 END) as unread_received,
-                   COUNT(CASE WHEN is_outgoing = 1 THEN 1 END) as unread_sent
-            FROM messages 
-            WHERE is_read = 0{year_filter}
-            """
-
-        elif "last week" in question_lower or "past week" in question_lower:
-            return f"""
-            SELECT DATE(timestamp) as date,
-                   COUNT(*) as daily_count,
-                   COUNT(CASE WHEN is_outgoing = 0 THEN 1 END) as received,
-                   COUNT(CASE WHEN is_outgoing = 1 THEN 1 END) as sent
-            FROM messages 
-            WHERE timestamp >= date('now', '-7 days'){year_filter}
-            GROUP BY DATE(timestamp)
-            ORDER BY date DESC
-            """
-
-        else:
-            # Enhanced default query with more context
-            return f"""
-            SELECT subject, 
-                   sender->>'$.email' as sender, 
-                   timestamp,
-                   is_read,
-                   is_outgoing,
-                   CASE WHEN length(body) > 100 THEN substr(body, 1, 100) || '...' ELSE body END as preview
-            FROM messages 
-            WHERE 1=1{year_filter}
-            ORDER BY timestamp DESC
-            LIMIT 10
-            """
+    def _simple_fallback_query(self) -> str:
+        """Simple fallback query when AI generation fails."""
+        return """
+        SELECT subject, sender, timestamp, is_read, is_outgoing
+        FROM messages
+        ORDER BY timestamp DESC
+        LIMIT 10
+        """
 
     def _execute_sql_query(self, sql_query: str) -> str:
         """Execute a SQL query and return formatted results."""

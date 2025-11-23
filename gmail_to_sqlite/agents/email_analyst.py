@@ -1,4 +1,4 @@
-"""Gmail Q&A Agent - A friendly AI assistant for analyzing Gmail data."""
+"""Email Data Analysis Agent for querying email databases."""
 
 import os
 import sqlite3
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class EmailAnalysisAgent:
-    """A friendly AI assistant that helps you understand your Gmail data through natural conversation."""
+    """An AI agent that analyzes email data through SQL queries."""
 
     def __init__(
         self,
@@ -57,10 +57,10 @@ class EmailAnalysisAgent:
         # Get database schema for context
         self.db_schema = self._get_database_schema()
 
-        # Create the human-like CrewAI agent
+        # Create the CrewAI agent
         self.agent = Agent(
-            role="Gmail Assistant",
-            goal="Help users understand their Gmail data by answering questions in a friendly, conversational way using SQL queries to find the information they need.",
+            role="Email Data Analyst",
+            goal="Analyze email data by executing SQL queries to extract requested information and provide clear results.",
             backstory=self._build_backstory(),
             llm=self.llm,
             verbose=False,
@@ -70,29 +70,13 @@ class EmailAnalysisAgent:
         )
 
     def _build_backstory(self) -> str:
-        """Build a human-like backstory for the agent."""
-        user_name = (
-            self.user_config.get("name", "friend") if self.user_config else "friend"
-        )
+        """Build a professional backstory for the agent."""
+        return f"""You are an email data analyst that helps users query and understand their email database.
 
-        return f"""You are a helpful Gmail assistant who loves helping people understand their email data. 
-        
-You're chatting with {user_name}, and your job is to answer their questions about their Gmail inbox in a friendly, conversational way. 
-
-When they ask about their emails, you:
-- Use your SQL tool to query their Gmail database
-- Explain what you found in plain English
-- Provide insights and context about their email patterns
-- Keep the conversation natural and engaging
-
-Your database contains their Gmail messages with details like:
-- Senders and recipients
-- Subject lines and message content
-- Labels (like "Action Item", "Important", etc.)
-- Timestamps and read status
-- Thread information
-
-You're knowledgeable about email data but always explain things clearly, as if you're a friend helping them explore their inbox.
+When analyzing email data, you:
+- Execute SQL queries using the Enhanced SQLite Query Tool
+- Present results clearly and accurately
+- Provide relevant insights based on the data
 
 Database Schema:
 {self.db_schema}
@@ -133,15 +117,12 @@ Database Schema:
                 description=f"""
                 The user asked: "{user_message}"
                 
-                Help them by:
-                1. Understanding what they want to know about their Gmail data
-                2. Using the Enhanced SQLite Query Tool to find the information
-                3. Explaining the results in a friendly, conversational way
-                4. Providing any relevant insights or context
-                
-                Be natural and helpful - like a friend who's good with data helping them explore their email.
+                Analyze this request by:
+                1. Understanding what information is being requested from the email database
+                2. Using the Enhanced SQLite Query Tool to execute appropriate queries
+                3. Presenting the results clearly with relevant context
                 """,
-                expected_output="A friendly, helpful response that answers the user's question about their Gmail data with clear explanations and insights.",
+                expected_output="A clear response that answers the user's question with data from the email database.",
                 agent=self.agent,
             )
 

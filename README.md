@@ -10,8 +10,13 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 - **Robust Error Handling**: Automatic retries with exponential backoff
 - **Graceful Shutdown**: Handles interruption signals cleanly
 - **Type Safety**: Comprehensive type hints throughout the codebase
-- **AI-Powered Chat**: Interactive chat interface and natural language queries about your emails using OpenAI
-- **Interactive Chat**: Multi-turn conversational interface with CrewAI agents for email analysis
+- **AI-Powered Chat**: Ask one-off natural language questions, or hold a multi-turn conversation
+- **Multiple AI Providers**: Gemini (default), OpenAI, or Claude, selectable per run with `--model`
+- **Persistent Conversations**: Chat history is stored in SQLite and survives across sessions
+- **User Personalization**: Per-account name, email, bio, and custom instructions shape the agent's replies
+- **Multi-Account Support**: Define several Gmail accounts, each with its own data directory
+- **Rich Terminal UI**: Themed, formatted output with progress indicators
+- **Automatic Re-Authentication**: Prompts you to re-auth when a Gmail token expires
 
 ## Installation
 
@@ -99,6 +104,29 @@ cp .secrets.toml.example .secrets.toml
 gmail-to-sqlite sync
 ```
 
+#### Accounts and personalization
+
+Accounts are declared as `[[ACCOUNT]]` blocks in `.secrets.toml`. Each one carries its
+own data directory plus optional personalization that the chat agent uses for context:
+
+```toml
+[[ACCOUNT]]
+name = "personal"
+data_dir = "/path/to/your/gmail-data"
+user_name = "Your Name"
+user_email = "your.email@example.com"
+bio = "Brief description of yourself and work context"
+custom_instructions = "Custom instructions for how the AI should interact with you"
+```
+
+Add further `[[ACCOUNT]]` blocks for additional mailboxes (for example a `work`
+account with its own `data_dir`). The first account listed is treated as the primary
+one. `bio` and `custom_instructions` are injected into the agent's context, so the
+answers reflect who you are and how you want to be addressed.
+
+Core application settings (`DEBUG`, `MAX_WORKERS`, `BATCH_SIZE`) live in
+`settings.toml`; secrets and accounts stay in `.secrets.toml`, which is not committed.
+
 ### Basic Commands
 
 If you installed with uv tool install (global installation):
@@ -145,6 +173,7 @@ python -m gmail_to_sqlite chat
 - `--question`: Optional for `chat`. Natural language question about your emails (if provided, asks question and exits; if not provided, starts interactive chat)
 - `--max-rows`: Optional. Maximum number of rows to display in query results (default: 20)
 - `--workers`: Optional. Number of worker threads (default: number of CPU cores)
+- `--model`, `-m`: Optional for `chat`. AI model to use: `gemini` (default), `openai`, or `claude`
 
 **Note**: Data directory is configured in `.secrets.toml`, not via command line arguments.
 
@@ -234,6 +263,10 @@ Features of the interactive chat:
 - **Context Preservation**: The agent remembers previous questions and responses
 - **Natural Conversation**: Ask follow-up questions without repeating context
 - **Smart Analysis**: CrewAI agents provide insights beyond simple SQL queries
+- **Persistent History**: Conversations are saved to SQLite, so context survives restarts
+- **Session IDs**: Each chat runs under a session id, shown at startup
+- **Model Switching**: Change the AI provider mid-conversation without losing context
+- **Personalized Replies**: The agent uses your account's `bio` and `custom_instructions`
 - **Easy Exit**: Type `exit`, `quit`, or press Ctrl+C to end the session
 
 ## Manual SQL Queries

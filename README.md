@@ -11,10 +11,10 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 - **Graceful Shutdown**: Handles interruption signals cleanly
 - **Type Safety**: Comprehensive type hints throughout the codebase
 - **AI-Powered Chat**: Ask one-off natural language questions, or hold a multi-turn conversation
-- **Multiple AI Providers**: Gemini (default), OpenAI, or Claude, selectable per run with `--model`
+- **Multiple AI Providers**: OpenAI (default), Gemini, or Anthropic, selectable per run with `--model`
 - **Persistent Conversations**: Chat history is stored in SQLite and survives across sessions
 - **User Personalization**: Per-account name, email, bio, and custom instructions shape the agent's replies
-- **Multi-Account Support**: Define several Gmail accounts, each with its own data directory
+- **Multi-Account Support**: Define several Gmail accounts and select one with `--account`
 - **Rich Terminal UI**: Themed, formatted output with progress indicators
 - **Automatic Re-Authentication**: Prompts you to re-auth when a Gmail token expires
 
@@ -120,8 +120,8 @@ custom_instructions = "Custom instructions for how the AI should interact with y
 ```
 
 Add further `[[ACCOUNT]]` blocks for additional mailboxes (for example a `work`
-account with its own `data_dir`). The first account listed is treated as the primary
-one. `bio` and `custom_instructions` are injected into the agent's context, so the
+account with its own `data_dir`), then select one with `--account work`. The first
+account listed is used when `--account` is omitted. `bio` and `custom_instructions` are injected into the agent's context, so the
 answers reflect who you are and how you want to be addressed.
 
 Core application settings (`DEBUG`, `MAX_WORKERS`, `BATCH_SIZE`) live in
@@ -143,6 +143,9 @@ gmail-to-sqlite sync-message --message-id MESSAGE_ID
 
 # Detect and mark deleted messages only
 gmail-to-sqlite sync-deleted-messages
+
+# Sync a specific account (defaults to the first [[ACCOUNT]] listed)
+gmail-to-sqlite sync --account work
 
 # Use custom number of worker threads
 gmail-to-sqlite sync --workers 8
@@ -173,7 +176,8 @@ python -m gmail_to_sqlite chat
 - `--question`: Optional for `chat`. Natural language question about your emails (if provided, asks question and exits; if not provided, starts interactive chat)
 - `--max-rows`: Optional. Maximum number of rows to display in query results (default: 20)
 - `--workers`: Optional. Number of worker threads (default: number of CPU cores)
-- `--model`, `-m`: Optional for `chat`. AI model to use: `gemini` (default), `openai`, or `claude`
+- `--model`, `-m`: Optional for `chat`. AI model to use: `openai` (default), `gemini`, or `anthropic`
+- `--account`, `-a`: Optional. Name of the `[[ACCOUNT]]` to operate on (defaults to the first account listed)
 
 **Note**: Data directory is configured in `.secrets.toml`, not via command line arguments.
 

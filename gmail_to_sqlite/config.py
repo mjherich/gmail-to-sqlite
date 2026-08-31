@@ -10,30 +10,15 @@ from typing import Optional, Dict, Any
 
 # Define validators for configuration integrity
 validators = [
-    # API Keys validation
-    Validator(
-        "OPENAI_API_KEY",
-        must_exist=True,
-        startswith="sk-",
-        messages={
-            "must_exist_true": "OPENAI_API_KEY is required for AI chat functionality"
-        },
-    ),
-    Validator(
-        "GOOGLE_API_KEY",
-        must_exist=True,
-        messages={
-            "must_exist_true": "GOOGLE_API_KEY is required for Gemini chat functionality"
-        },
-    ),
-    Validator(
-        "ANTHROPIC_API_KEY",
-        must_exist=True,
-        startswith="sk-ant-",
-        messages={
-            "must_exist_true": "ANTHROPIC_API_KEY is required for Claude chat functionality"
-        },
-    ),
+    # API keys are optional here on purpose: only the provider selected with
+    # --model is actually needed, and ModelManager raises a targeted
+    # ConfigurationError (with a signup link) if that provider's key is missing.
+    # Requiring all three here would break `sync`, which needs no AI key at all,
+    # because Dynaconf runs these validators on first settings access.
+    # Format is still checked whenever a key IS supplied.
+    Validator("OPENAI_API_KEY", startswith="sk-"),
+    Validator("GOOGLE_API_KEY"),
+    Validator("ANTHROPIC_API_KEY", startswith="sk-ant-"),
     # ACCOUNT validation - at least one account must exist
     Validator(
         "ACCOUNT",

@@ -22,10 +22,10 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.10–3.13 (development is pinned to 3.12 via `.python-version`)
 - Google Cloud Project with Gmail API enabled
-- OAuth 2.0 credentials file (`credentials.json`)
-- OpenAI API key (for AI query features)
+- OAuth 2.0 credentials file (`credentials.json`), Desktop application type
+- An API key for **one** AI provider — only needed for `chat`; `sync` requires none
 
 ### Setup
 
@@ -33,19 +33,24 @@ A robust Python application that syncs Gmail messages to a local SQLite database
 
 ```bash
 # Install from source with uv tool install (package not yet on PyPI)
-git clone https://github.com/marcboeker/gmail-to-sqlite.git
+git clone https://github.com/mjherich/gmail-to-sqlite.git
 cd gmail-to-sqlite
 uv tool install .
 ```
 
 **Note**: `uv tool install` automatically handles dependency resolution with the correct versions from the lock file. This is the modern replacement for pipx.
 
+> **Caveat**: `credentials.json` is looked up in the directory that *contains* the
+> installed `gmail_to_sqlite` package, so a global install expects it inside uv's tool
+> environment rather than in a convenient location. Until that is made configurable,
+> Option 2 is the smoother path if you are actively syncing.
+
 #### Option 2: Development Setup
 
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/marcboeker/gmail-to-sqlite.git
+   git clone https://github.com/mjherich/gmail-to-sqlite.git
    cd gmail-to-sqlite
    ```
 
@@ -79,13 +84,15 @@ uv tool install .
    The `.secrets.toml` file should contain:
 
    ```toml
-   # Data directory where SQLite database and credentials will be stored
-   DATA_DIR = "/path/to/your/gmail-data"
-
-   # At least one of these is required for chat functionality
+   # Only the provider you actually select with --model is required.
    OPENAI_API_KEY = "your-openai-api-key-here"       # Get from: https://platform.openai.com/api-keys
    GOOGLE_API_KEY = "your-google-api-key-here"       # Get from: https://aistudio.google.com/app/apikey
    ANTHROPIC_API_KEY = "your-anthropic-api-key-here" # Get from: https://console.anthropic.com/
+
+   # At least one account is required. The data directory is per-account.
+   [[ACCOUNT]]
+   name = "personal"
+   data_dir = "/path/to/your/gmail-data"
    ```
 
 ## Usage
@@ -126,6 +133,19 @@ answers reflect who you are and how you want to be addressed.
 
 Core application settings (`DEBUG`, `MAX_WORKERS`, `BATCH_SIZE`) live in
 `settings.toml`; secrets and accounts stay in `.secrets.toml`, which is not committed.
+
+#### Where files live
+
+| File              | Location                     | Purpose                              |
+| ----------------- | ---------------------------- | ------------------------------------ |
+| `credentials.json`| Project root                 | OAuth 2.0 client from Google Cloud   |
+| `token.json`      | The account's `data_dir`     | Cached credentials, per account      |
+| `messages.db`     | The account's `data_dir`     | The synced SQLite database           |
+| `.secrets.toml`   | Project root                 | API keys and `[[ACCOUNT]]` blocks     |
+| `settings.toml`   | Project root                 | Non-secret application settings      |
+
+Because `token.json` and `messages.db` are resolved per account, two `[[ACCOUNT]]`
+blocks with different `data_dir` values stay fully isolated from one another.
 
 ### Basic Commands
 
@@ -193,6 +213,9 @@ The application supports graceful shutdown when you press CTRL+C:
 Pressing CTRL+C a second time will force an immediate exit.
 
 ## Database Schema
+
+For a step-by-step view of how a sync run works — incremental vs. full, deletion
+detection, and the worker pool — see [`sync-flow-diagram.md`](sync-flow-diagram.md).
 
 The application creates a SQLite database with the following schema:
 
@@ -363,3 +386,29 @@ FROM messages
 WHERE is_deleted=1
 ORDER BY timestamp DESC
 ```
+
+## Development
+
+Common tasks are wrapped in the `Makefile` (run `make help` to list them all):
+
+```bash
+make install-dev   # uv sync --dev
+make test          # uv run pytest tests/ -v
+make test-cov      # pytest with an HTML + terminal coverage report
+make lint          # flake8 + mypy over gmail_to_sqlite
+make format        # black
+make build         # uv build
+```
+
+The project builds with **hatchling** and locks dependencies with **uv** (`uv.lock`).
+Add dependencies with `uv add` rather than editing `pyproject.toml` by hand.
+
+Planning and research artifacts belong in `.planning/`, which is gitignored; use the
+`mm-dd-yy_description.ext` naming convention.
+
+### A note on imports
+
+`gmail_to_sqlite/__init__.py` eagerly re-exports the chat entry points, so importing
+any submodule currently pulls in the full CrewAI stack. That means `sync`-only usage,
+and the test suite, still require the AI dependencies to be installed. Making the chat
+imports lazy would decouple the two.

@@ -2,7 +2,7 @@
 
 ## Bash Commands
 - `uv run gmail-to-sqlite sync`: Sync Gmail messages to database
-- `uv run gmail-to-sqlite chat --model claude`: Start AI chat with Claude
+- `uv run gmail-to-sqlite chat --model anthropic`: Start AI chat with Claude
 - `uv run gmail-to-sqlite chat --model openai`: Start AI chat with OpenAI
 - `uv run gmail-to-sqlite chat --model gemini`: Start AI chat with Gemini
 - `uv run pytest`: Run test suite
@@ -28,6 +28,7 @@
 
 ## CrewAI & AI Chat Guidelines
 - **Model Configuration**: Support Gemini, OpenAI, and Claude models
+  (`--model` values: `gemini`, `openai`, `anthropic`; default `openai`)
 - **API Keys**: Store in `.secrets.toml` using environment variable patterns:
   - `GOOGLE_API_KEY` for Gemini
   - `OPENAI_API_KEY` for OpenAI  
@@ -77,7 +78,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **Database Testing**: Use temporary databases for integration tests
 
 ## Development Workflow
-1. **Setup**: Install dependencies with `uv install`
+1. **Setup**: Install dependencies with `uv sync` (or `make install-dev`)
 2. **Development**: Make changes following code style guidelines
 3. **Testing**: Run tests and ensure they pass
 4. **Type Checking**: Run mypy to verify type annotations
@@ -89,7 +90,10 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **Settings**: Use Dynaconf with `settings.toml` for app configuration
 - **Secrets**: Store API keys in `.secrets.toml` (excluded from git)
 - **Environment**: Support different configurations for dev/prod
-- **Validation**: Validate required settings on startup
+- **Validation**: Validate settings that every command needs (e.g. `[[ACCOUNT]]`) in
+  `config.py`. Do NOT add `must_exist` validators for per-provider API keys: Dynaconf
+  runs constructor validators on first settings access, so that would break `sync`,
+  which needs no AI key. `ModelManager` checks the selected provider's key lazily.
 
 ## Error Handling Best Practices
 - **API Calls**: Always include timeout and retry logic
@@ -113,4 +117,5 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **Organization**: Files are self-organizing by date prefix for easy chronological sorting
 
 ## Dependency Management
-- Whenever adding new python dependencies, use poetry add, do not update pyproject.toml directly
+- Whenever adding new python dependencies, use `uv add`, do not update pyproject.toml directly.
+  This project builds with hatchling and locks with `uv.lock`; there is no Poetry setup.

@@ -1,3 +1,8 @@
+# TODO: commit cursor rules, just testing for now
+.cursor/rules/
+
+# Planning and research artifacts handled by .planning/.gitignore
+
 # Application specific
 credentials.json
 token.json
@@ -5,6 +10,9 @@ token.json
 *.sqlite
 *.sqlite3
 data/
+
+# Contains API keys and other sensitive data
+.secrets.toml
 
 # Python
 __pycache__/
@@ -32,7 +40,6 @@ MANIFEST
 # Virtual environments
 .venv/
 venv/
-.env
 
 # IDE
 .vscode/

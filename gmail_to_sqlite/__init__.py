@@ -9,6 +9,7 @@ __version__ = "0.2.0"
 from .auth import get_credentials
 from .db import init, Message, create_message, get_all_message_ids
 from .sync import all_messages, single_message, get_labels
+from .chat import start_chat, ask_single_question, ChatError
 
 __all__ = [
     "get_credentials",
@@ -19,4 +20,7 @@ __all__ = [
     "all_messages",
     "single_message",
     "get_labels",
+    "start_chat",
+    "ask_single_question",
+    "ChatError",
 ]

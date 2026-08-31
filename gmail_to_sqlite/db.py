@@ -14,6 +14,7 @@ from peewee import (
 from playhouse.sqlite_ext import JSONField, SqliteDatabase
 
 from .constants import DATABASE_FILE_NAME
+from .config import settings
 
 database_proxy = Proxy()
 
@@ -86,12 +87,14 @@ class Message(Model):
         db_table = "messages"
 
 
-def init(data_dir: str, enable_logging: bool = False) -> SqliteDatabase:
+def init(
+    data_dir: Optional[str] = None, enable_logging: bool = False
+) -> SqliteDatabase:
     """
-    Initialize the database for the given data_dir.
+    Initialize the database using specified or configured data directory.
 
     Args:
-        data_dir (str): The path where to store the data.
+        data_dir (str, optional): Data directory path. If None, uses DATA_DIR from settings.
         enable_logging (bool, optional): Whether to enable logging. Defaults to False.
 
     Returns:
@@ -101,6 +104,11 @@ def init(data_dir: str, enable_logging: bool = False) -> SqliteDatabase:
         DatabaseError: If database initialization fails.
     """
     try:
+        if data_dir is None:
+            data_dir = settings.get("DATA_DIR")
+            if not data_dir:
+                raise DatabaseError("DATA_DIR not configured in settings")
+
         db_path = f"{data_dir}/{DATABASE_FILE_NAME}"
         db = SqliteDatabase(db_path)
         database_proxy.initialize(db)
@@ -168,9 +176,9 @@ def last_indexed() -> Optional[datetime]:
         Optional[datetime]: The timestamp of the last indexed message, or None if no messages exist.
     """
 
-    msg = Message.select().order_by(Message.timestamp.desc()).first()
+    msg = Message.select().order_by(Message.last_indexed.desc()).first()
     if msg:
-        timestamp: Optional[datetime] = msg.timestamp
+        timestamp: Optional[datetime] = msg.last_indexed
         return timestamp
     else:
         return None
@@ -184,9 +192,9 @@ def first_indexed() -> Optional[datetime]:
         Optional[datetime]: The timestamp of the first indexed message, or None if no messages exist.
     """
 
-    msg = Message.select().order_by(Message.timestamp.asc()).first()
+    msg = Message.select().order_by(Message.last_indexed.asc()).first()
     if msg:
-        timestamp: Optional[datetime] = msg.timestamp
+        timestamp: Optional[datetime] = msg.last_indexed
         return timestamp
     else:
         return None

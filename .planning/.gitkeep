@@ -1,0 +1,11 @@
+# Planning & Research Workspace
+
+This directory serves as a scratch workspace for planning, research, and development artifacts.
+
+## File Naming Convention
+Use date-prefixed filenames: `mm-dd-yy_description.ext`
+
+Examples: `06-21-25_analysis.md`, `06-22-25_implementation_plan.md`
+
+## Note
+Directory contents are gitignored to keep repository clean.

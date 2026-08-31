@@ -1,0 +1,2 @@
+# Allow Cursor to access secrets files despite being in .gitignore
+!.secrets.toml
